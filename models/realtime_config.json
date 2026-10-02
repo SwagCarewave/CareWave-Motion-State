@@ -1,0 +1,22 @@
+{
+ "tick_sec": 0.25,
+ "toss_lag_frames": 5,
+ "toss_win_frames": 10,
+ "walk_lag_frames": 3,
+ "walk_win_frames": 20,
+ "toss_threshold": 0.146,
+ "walk_start": 0.3398,
+ "walk_end": 0.2549,
+ "persistence": "continuous",
+ "walk_hold_sec": 3.0,
+ "gap_sec": 1.0,
+ "ratio_window_sec": 8.0,
+ "ratio_min": 0.7,
+ "event_merge_sec": 30.0,
+ "calibration_sec": 20.0,
+ "baseline_update": true,
+ "baseline_alpha": 0.002,
+ "stream_init_packets": 60,
+ "min_packet_rate": 3.0,
+ "signal_window_sec": 2.0
+}

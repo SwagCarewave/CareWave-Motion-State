@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+outputs/
+data/raw_csi/
+docs/export/

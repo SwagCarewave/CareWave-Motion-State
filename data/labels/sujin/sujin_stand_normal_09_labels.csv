@@ -1,0 +1,6 @@
+video_name,start_sec,end_sec,label
+sujin_stand_normal_09.mp4,0,1,moving_arms
+sujin_stand_normal_09.mp4,1,8,standing
+sujin_stand_normal_09.mp4,8,10,moving_arms
+sujin_stand_normal_09.mp4,10,11,standing
+sujin_stand_normal_09.mp4,11,12,moving_arms
