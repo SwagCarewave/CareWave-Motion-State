@@ -78,17 +78,9 @@ def main(data: Path, out: Path, lookaheads: list[float], tossing: str = "static"
         feats = [c for c in table.columns if c not in ("sample_id", "date", "person", "label", "cls", "dchg", "t")]
         table = add_relative(table, feats)
         tag = "" if (tossing, standing, walking_only) == ("static", "static", False)             else f"_toss-{tossing}_stand-{standing}" + ("_walkonly" if walking_only else "")
-        name = out / f"windows_L{look:g}{tag}.parquet"
-        table.to_parquet(name, index=False) if _has_parquet() else table.to_csv(name.with_suffix(".csv"), index=False)
+        # always CSV: every downstream script reads windows_L*.csv
+        table.to_csv(out / f"windows_L{look:g}{tag}.csv", index=False)
         print(f"look-ahead {look}s: {len(table)} windows, {len(feats)} abs features", flush=True)
-
-
-def _has_parquet() -> bool:
-    try:
-        import pyarrow  # noqa: F401
-        return True
-    except ImportError:
-        return False
 
 
 if __name__ == "__main__":
