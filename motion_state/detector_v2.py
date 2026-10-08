@@ -30,7 +30,7 @@ class Decision:
 
 
 class LyingDynamicDetector:
-    def __init__(self, model_path: Path = Path("models/lying_dynamic_v2.pkl"), init_packets: int = 60):
+    def __init__(self, model_path: Path = Path("models/lying_walking_v2.pkl"), init_packets: int = 60):
         bundle = pickle.loads(Path(model_path).read_bytes())
         self.model, self.columns = bundle["model"], bundle["columns"]
         self.threshold, self.smooth = bundle["threshold"], bundle["smooth"]

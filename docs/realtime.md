@@ -1,5 +1,7 @@
 # CareWave real-time night monitor (2026-10-02)
 
+> **Superseded.** This page describes the first real-time monitor (`motion_state/realtime.py`). Its threshold file `models/realtime_config.json` has been removed; `run_monitor.py` now uses `motion_state/monitor_v2.py` with `models/lying_walking_v2.pkl` (see `docs/service_v2.md`).
+
 Follows the service plan "몽유병 위험군을 위한 야간 활동 감지·보호자 알림".
 - Code: `motion_state/realtime.py`, run with `run_monitor.py`.
 - Thresholds: `models/realtime_config.json`, fitted by `fit_realtime.py`.

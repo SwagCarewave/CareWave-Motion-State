@@ -92,7 +92,7 @@ What is possible is noticing that the posture changed. For the service, these ap
 ```
 .venv\Scripts\python build_dataset.py            # data/ -> outputs/cache
 .venv\Scripts\python run_experiments.py          # leave-one-date-out -> outputs/experiments
-.venv\Scripts\python train.py                    # all data -> models/motion_state_v1.pkl
+.venv\Scripts\python train.py                    # all data -> models/motion_state_v1.pkl (v1; no longer kept in the repo)
 .venv\Scripts\python evaluate.py --data <folder> # e.g. the private holdout (same raw_csi/labels layout)
 ```
 

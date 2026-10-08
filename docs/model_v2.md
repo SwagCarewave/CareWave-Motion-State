@@ -90,4 +90,4 @@ Bias note: Claude explored this same data before designing v2, so candidate feat
 - `train_v2.py` — nested CV and final model
 - `motion_state/detector_v2.py` — streaming detector
 - `evaluate_v2.py` — holdout evaluation through the streaming detector
-- `models/lying_dynamic_v2.pkl` — GBM on 60 absolute features, threshold 0.459, 1 s look-ahead
+- `models/lying_walking_v2.pkl` — final model: logistic regression on 60 absolute features, threshold 0.500, 1 s look-ahead (lying + tossing vs walking). The earlier `lying_dynamic_v2.pkl` (GBM, lying vs all motion) was removed.
