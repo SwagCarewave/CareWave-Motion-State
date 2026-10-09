@@ -95,3 +95,26 @@ def test_rx_status_transitions():
     assert status["RX3"]["status"] == "weak"
     later = {s["rx"]: s["status"] for s in engine.rx_status(1012.0)}
     assert later == {"RX1": "lost", "RX2": "lost", "RX3": "lost"}
+
+
+def test_engine_rejects_incomplete_packets():
+    import numpy as np
+
+    engine = build_engine(Settings(), origin_ts=1000.0)
+    broken = np.full(52, 10.0)
+    broken[-1] = np.nan
+    for i in range(40):
+        engine.push(1000.0 + i * 0.1, "RX1", broken)
+        engine.push(1000.0 + i * 0.1, "RX2", np.full(51, 10.0))
+    assert engine.rejected == 80
+    assert {s["status"] for s in engine.rx_status(1004.0)} == {"none"}
+
+
+def test_close_event_rejects_transient_result(sample_csv):
+    table = load_csi_csv(sample_csv)
+    engine = build_engine(Settings(), origin_ts=table.origin_ts)
+    run_table(engine, table)
+    event_id = engine.events()[0]["id"]
+    with pytest.raises(ValueError):
+        engine.close_event(event_id, "확인 중")
+    assert engine.open_events()[0]["id"] == event_id

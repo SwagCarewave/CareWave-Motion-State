@@ -7,9 +7,10 @@ from pathlib import Path
 import numpy as np
 
 from motion_state.csi_io import N_SUB, RX_IDS
-from motion_state.monitor_v2 import GUARDIAN_RESULTS, MonitorOutput, NightMonitorV2, ServiceConfig
+from motion_state.monitor_v2 import MonitorOutput, NightMonitorV2, ServiceConfig
 
 RX_STATUS_KO = {"ok": "정상", "weak": "신호 부족", "lost": "연결 끊김", "none": "미연결"}
+FINAL_GUARDIAN_RESULTS = ("정상 활동", "도움 필요", "잘못된 감지")
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ class Frame:
 @dataclass
 class _HeatBin:
     total: np.ndarray = field(default_factory=lambda: np.zeros(N_SUB))
-    count: np.ndarray = field(default_factory=lambda: np.zeros(N_SUB))
+    count: int = 0
 
 
 class MotionEngine:
@@ -69,6 +70,7 @@ class MotionEngine:
         self.recent: dict[str, deque] = {rx: deque() for rx in RX_IDS}
         self.heat: dict[int, _HeatBin] = {}
         self.frames = 0
+        self.rejected = 0
 
     @property
     def threshold(self) -> float:
@@ -84,6 +86,9 @@ class MotionEngine:
             self.origin_ts = 0.0
         rx = rx.strip().upper()
         amplitude = np.asarray(amplitude, dtype=np.float64)
+        if amplitude.shape != (N_SUB,) or not np.all(np.isfinite(amplitude)):
+            self.rejected += 1
+            return
         self.monitor.push_packet(t, rx, amplitude)
         self.last_t = t if self.last_t is None else max(self.last_t, t)
         if rx not in self.last_seen:
@@ -139,8 +144,8 @@ class MotionEngine:
         return [self._event(e) for e in self.monitor.open_events()]
 
     def close_event(self, event_id: int, result: str) -> dict:
-        if result not in GUARDIAN_RESULTS:
-            raise ValueError(f"result must be one of {GUARDIAN_RESULTS}")
+        if result not in FINAL_GUARDIAN_RESULTS:
+            raise ValueError(f"result must be one of {FINAL_GUARDIAN_RESULTS}")
         for e in self.monitor.events:
             if e["id"] == event_id:
                 self.monitor.guardian_close(event_id, result)
@@ -200,23 +205,18 @@ class MotionEngine:
         return int(np.floor(t / self.step_sec + 0.5))
 
     def _add_heat(self, t: float, amplitude: np.ndarray) -> None:
-        ok = np.isfinite(amplitude)
-        if amplitude.shape != (N_SUB,) or not ok.any():
-            return
         b = self.heat.setdefault(self._bin(t), _HeatBin())
-        b.total[ok] += amplitude[ok]
-        b.count[ok] += 1
+        b.total += amplitude
+        b.count += 1
 
     def _take_heat(self, t: float) -> list[float] | None:
         key = self._bin(t)
         for k in [k for k in self.heat if k < key]:
             del self.heat[k]
         b = self.heat.pop(key, None)
-        if b is None or not b.count.any():
+        if b is None or b.count == 0:
             return None
-        with np.errstate(invalid="ignore", divide="ignore"):
-            row = b.total / b.count
-        return [None if not np.isfinite(v) else round(float(v), 2) for v in row]
+        return [round(float(v), 2) for v in b.total / b.count]
 
 
 def build_engine(settings, origin_ts: float | None = None, baseline: float | None = None) -> MotionEngine:
