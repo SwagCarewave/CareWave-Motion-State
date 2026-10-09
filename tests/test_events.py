@@ -207,3 +207,75 @@ def test_supabase_confirmation_roundtrip(tmp_path, sample_csv):
         repos.sessions.delete(row["id"])
     assert repos.activity_events.list({"session_id": row["id"]}) == []
     assert repos.guardian_confirmations.list({"event_id": event_id}) == []
+
+
+class _FailingUpsert:
+    def __init__(self, inner):
+        self.inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def upsert(self, *args, **kwargs):
+        raise RuntimeError("database down")
+
+
+def _live_manager(live_settings, repos=None):
+    repos = repos or memory_repositories(live_settings.local_storage_dir)
+    clock = FakeClock()
+    manager = SessionManager(live_settings, repos, "sha", clock)
+    return manager, EventService(repos, manager, clock), repos, clock
+
+
+def test_alert_is_published_only_after_event_is_saved(live_settings, sample_csv):
+    manager, _, repos, clock = _live_manager(live_settings)
+    row, _ = manager.start()
+    seen = []
+    publish = manager._publish
+
+    def spy(live, message):
+        if message["type"] == "alert":
+            seen.append(repos.activity_events.get(message["event_uuid"]) is not None)
+        publish(live, message)
+
+    manager._publish = spy
+    packets = csv_packets(sample_csv)
+    clock.now = packets[-1]["ts"]
+    manager.ingest(row["id"], packets)
+    assert seen == [True, True]
+
+
+def test_alert_event_opens_even_if_database_save_failed(live_settings, sample_csv):
+    from dataclasses import replace
+
+    base = memory_repositories(live_settings.local_storage_dir)
+    repos = replace(base, activity_events=_FailingUpsert(base.activity_events))
+    manager, service, _, clock = _live_manager(live_settings, repos)
+    row, _ = manager.start()
+    packets = csv_packets(sample_csv, 900)
+    clock.now = packets[-1]["ts"]
+    manager.ingest(row["id"], packets)
+    event_uuid = manager.live[row["id"]].event_uuids[1]
+    assert base.activity_events.get(event_uuid) is None
+    detail = service.get(event_uuid)
+    assert detail["number"] == 1
+    assert detail["ongoing"] is True
+    assert detail["status"] == "unconfirmed"
+
+
+def test_confirming_active_event_keeps_it_ongoing(live_settings, sample_csv):
+    manager, service, _, clock = _live_manager(live_settings)
+    row, _ = manager.start()
+    packets = csv_packets(sample_csv, 900)
+    clock.now = packets[-1]["ts"]
+    manager.ingest(row["id"], packets)
+    event_id = service.list(session_id=row["id"])["items"][0]["id"]
+    assert service.get(event_id)["ongoing"] is True
+
+    confirmed = service.confirm(event_id, "정상 활동")
+    marker = manager.signals(row["id"], window_sec=3600)["events"][0]
+    assert confirmed["ongoing"] is True
+    assert confirmed["ended_at"] is None
+    assert confirmed["status"] == "confirmed"
+    assert marker["ongoing"] is True
+    assert marker["guardian_result"] == "정상 활동"
