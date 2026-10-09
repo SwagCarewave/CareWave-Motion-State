@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from helpers import FakeClock, csv_packets, send_packets, start_session
@@ -392,3 +394,43 @@ def test_iso_timestamps_keep_sub_millisecond_order(app_client, sample_csv):
     frames = list(app_client.app.state.sessions.live[sid].frames)
     assert [(f.state, f.activity_score) for f in frames] == [(o.state, o.activity_score) for o in ref]
     assert app_client.get(f"/api/sessions/{sid}").json()["event_count"] == len(mon.events) == 2
+
+
+def test_same_timestamp_different_packets_are_kept(app_client):
+    sid = start_session(app_client)
+    t = 1782371762.5
+    first = {"ts": t, "rx": "RX1", "amplitude": [1.0] * 52}
+    second = {"ts": t, "rx": "RX1", "amplitude": [2.0] * 52}
+    app_client.clock.now = t
+    body = app_client.post(f"/api/sessions/{sid}/packets", json={"packets": [first, second]}).json()
+    assert body["accepted"] == 2 and body["rejected_stale"] == 0
+    again = app_client.post(f"/api/sessions/{sid}/packets", json={"packets": [first, second]}).json()
+    assert again["accepted"] == 0 and again["rejected_stale"] == 2
+    later = app_client.post(f"/api/sessions/{sid}/packets",
+                            json={"packets": [{**first, "ts": t + 0.03}, first]}).json()
+    assert later["accepted"] == 1 and later["rejected_stale"] == 1
+
+
+def test_latest_recording_with_shared_timestamps_matches_engine(app_client):
+    from app.timeutil import parse_ts, to_iso
+
+    path = Path(__file__).resolve().parent.parent / "data" / "raw_csi" / "test" / "sujin_walk_stop_fall_01_csi_raw.csv"
+    packets = [{**p, "ts": to_iso(p["ts"])} for p in csv_packets(path)]
+    sid = start_session(app_client)
+    stale = accepted = 0
+    for i in range(0, len(packets), 300):
+        batch = packets[i:i + 300]
+        app_client.clock.now = parse_ts(batch[-1]["ts"])
+        body = app_client.post(f"/api/sessions/{sid}/packets", json={"packets": batch}).json()
+        stale += body["rejected_stale"]
+        accepted += body["accepted"]
+    assert stale == 0 and accepted == len(packets)
+
+    mon = NightMonitorV2(Settings().model_path)
+    ref = []
+    for p in packets:
+        ts = parse_ts(p["ts"])
+        mon.push_packet(ts, p["rx"], np.asarray(p["amplitude"]))
+        ref.extend(mon.poll(ts))
+    frames = list(app_client.app.state.sessions.live[sid].frames)
+    assert [(f.state, f.activity_score) for f in frames] == [(o.state, o.activity_score) for o in ref]
