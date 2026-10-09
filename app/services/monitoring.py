@@ -5,6 +5,7 @@ import logging
 import math
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
@@ -13,7 +14,7 @@ import numpy as np
 
 from app.config import Settings
 from app.repositories import Repositories, RepositoryError
-from app.services.engine import Frame, MotionEngine, build_engine
+from app.services.engine import RX_STATUS_KO, Frame, MotionEngine, build_engine
 from app.timeutil import from_iso, parse_ts, to_iso
 from motion_state.csi_io import N_SUB, RX_IDS
 from motion_state.monitor_v2 import STATE_KO
@@ -81,14 +82,20 @@ class LiveSession:
     last_flush_wall: float = 0.0
     last_status_key: tuple | None = None
     subscribers: set = field(default_factory=set)
+    retired_events: dict = field(default_factory=dict)
+    saved_events: dict = field(default_factory=dict)
+    alert_messages: dict = field(default_factory=dict)
+    restored_rx: list = field(default_factory=list)
+    saved_last_packet: float | None = None
 
     @property
     def id(self) -> str:
         return self.row["id"]
 
 
-def _frame_row(session_id: str, f: Frame) -> dict:
+def _frame_row(session_id: str, frame_id: str, f: Frame) -> dict:
     return {
+        "id": frame_id,
         "session_id": session_id,
         "ts": to_iso(f.ts),
         "state": f.state,
@@ -112,6 +119,35 @@ def _row_frame(row: dict) -> dict:
         "signal_ok": row.get("signal_ok", True),
         "heatmap": row.get("heatmap"),
     }
+
+
+def _event_row(session_id: str, e: dict, message: str | None) -> dict:
+    return {
+        "session_id": session_id,
+        "analysis_id": None,
+        "event_no": e["id"],
+        "started_at": to_iso(e["start_ts"]),
+        "alerted_at": to_iso(e["alert_ts"]),
+        "ended_at": None if e["end_ts"] is None else to_iso(e["end_ts"]),
+        "duration_sec": e["duration_sec"],
+        "alert_message": message,
+    }
+
+
+def _row_event(row: dict, guardian: str | None) -> dict:
+    return {
+        "id": row["event_no"],
+        "start_ts": from_iso(row["started_at"]),
+        "alert_ts": from_iso(row["alerted_at"]),
+        "end_ts": from_iso(row.get("ended_at")),
+        "duration_sec": row.get("duration_sec") or 0.0,
+        "ongoing": False,
+        "guardian_result": guardian,
+    }
+
+
+def _event_key(e: dict) -> tuple:
+    return e["start_ts"], e["alert_ts"], e["end_ts"], e["duration_sec"]
 
 
 def _mean(values: Iterable[float | None]) -> float | None:
@@ -180,6 +216,10 @@ class SessionManager:
             changes = {"status": "stopped", "stopped_at": to_iso(self.clock())}
             if live is not None:
                 with live.lock:
+                    try:
+                        self._save_rx(live, self.clock(), force=True)
+                    except Exception:
+                        log.exception("final receiver state save failed for session %s", session_id)
                     self._accept_frames(live, live.engine.flush())
                     self._flush(live)
                     if live.last_packet_ts is not None:
@@ -227,7 +267,11 @@ class SessionManager:
             if amp.shape != (N_SUB,) or not np.all(np.isfinite(amp)):
                 result.rejected_incomplete += 1
                 continue
-            prepared.append((wall if ts is None else ts, rx, amp))
+            ts = wall if ts is None else ts
+            if not math.isfinite(ts) or ts > wall + self.settings.future_skew_sec:
+                result.rejected_invalid += 1
+                continue
+            prepared.append((ts, rx, amp))
         prepared.sort(key=lambda x: x[0])
         new_frames: list[Frame] = []
         with live.lock:
@@ -236,6 +280,8 @@ class SessionManager:
                 if (last is not None and ts <= last) or (live.polled_until is not None and ts <= live.polled_until):
                     result.rejected_stale += 1
                     continue
+                if live.last_packet_ts is not None and ts - live.last_packet_ts > self.settings.max_gap_sec:
+                    new_frames.extend(self._new_segment(live))
                 live.last_rx_ts[rx] = ts
                 live.engine.push(ts, rx, amp)
                 new_frames.extend(live.engine.poll(ts))
@@ -267,39 +313,65 @@ class SessionManager:
             "state_ko": None,
             "motion_index": None,
             "activity_score": None,
-            "rx": [{"rx": rx, "status": "none", "status_ko": "미연결", "packet_rate": 0.0, "last_packet_ts": None}
-                   for rx in RX_IDS],
+            "rx": [self._rx_entry(rx, "none", 0.0, None) for rx in RX_IDS],
             "event_count": 0,
             "unconfirmed_count": 0,
         }
         if live is None:
-            return out
-        with live.lock:
-            if live.last_receive_wall is not None:
-                out["last_packet_at"] = round(live.last_packet_ts, 3)
-                out["seconds_since_last_packet"] = round(max(0.0, wall - live.last_receive_wall), 1)
-            out["rx"] = self._rx_status(live, wall)
-            if live.frames:
-                latest: Frame = live.frames[-1]
-                out.update(state=latest.state, state_ko=latest.state_ko, motion_index=latest.motion_index,
-                           activity_score=latest.activity_score)
-            out["event_count"] = len(live.engine.events())
-            out["unconfirmed_count"] = len(live.engine.open_events())
+            out["rx"] = self._stored_rx(session_id) or out["rx"]
+            latest = self._latest_stored_frame(session_id)
+            if latest is not None:
+                out.update(state=latest["state"], state_ko=STATE_KO.get(latest["state"], latest["state"]),
+                           motion_index=latest["motion_index"], activity_score=latest["activity_score"])
+        else:
+            with live.lock:
+                if live.last_receive_wall is not None:
+                    out["last_packet_at"] = round(live.last_packet_ts, 3)
+                    out["seconds_since_last_packet"] = round(max(0.0, wall - live.last_receive_wall), 1)
+                out["rx"] = self._rx_status(live, wall)
+                if live.frames:
+                    latest_frame: Frame = live.frames[-1]
+                    out.update(state=latest_frame.state, state_ko=latest_frame.state_ko,
+                               motion_index=latest_frame.motion_index, activity_score=latest_frame.activity_score)
+        events = self.events(session_id, live)
+        out["event_count"] = len(events)
+        out["unconfirmed_count"] = sum(1 for e in events if e["guardian_result"] is None)
         return out
+
+    def events(self, session_id: str, live: LiveSession | None = None) -> list[dict]:
+        merged: dict[int, dict] = {}
+        try:
+            rows = self.repos.activity_events.list({"session_id": session_id}, order_by="event_no")
+            confirmations = {}
+            if rows:
+                found = self.repos.guardian_confirmations.list({"event_id__in": [r["id"] for r in rows]})
+                confirmations = {c["event_id"]: c["result"] for c in found}
+            merged = {r["event_no"]: _row_event(r, confirmations.get(r["id"])) for r in rows}
+        except Exception:
+            if live is None:
+                raise
+            log.exception("could not load stored events for session %s", session_id)
+        if live is not None:
+            with live.lock:
+                for e in self._live_events(live):
+                    stored = merged.get(e["id"])
+                    if stored is not None and e["guardian_result"] is None:
+                        e = {**e, "guardian_result": stored["guardian_result"]}
+                    merged[e["id"]] = e
+        return [merged[k] for k in sorted(merged)]
 
     def signals(self, session_id: str, window_sec: float | None = None, from_ts: float | None = None,
                 to_ts: float | None = None, max_points: int = 1200, heatmap: bool = True) -> dict:
         row = self._row(session_id)
         live = self.get(session_id) if row["status"] == "running" else None
-        events: list[dict] = []
         if live is not None:
             with live.lock:
                 frames = [self._frame_point(f) for f in live.frames]
-                events = live.engine.events()
                 threshold = live.engine.threshold
         else:
             frames = self._stored_frames(session_id)
             threshold = None
+        events = self.events(session_id, live)
         end = to_ts if to_ts is not None else (frames[-1]["ts"] if frames else self.clock())
         start = from_ts if from_ts is not None else end - (window_sec or self.settings.live_retention_sec)
         picked = [f for f in frames if start <= f["ts"] <= end]
@@ -374,18 +446,7 @@ class SessionManager:
                     frames = live.engine.poll(data_now)
                     live.polled_until = data_now
                     self._accept_frames(live, frames)
-            rx = self._rx_status(live, wall)
-            key = tuple(r["status"] for r in rx)
-            if key != live.last_status_key:
-                for r in rx:
-                    self.repos.device_status.upsert({
-                        "session_id": live.id,
-                        "rx": r["rx"],
-                        "status": r["status"],
-                        "packet_rate": r["packet_rate"],
-                        "last_packet_at": None if r["last_packet_ts"] is None else to_iso(r["last_packet_ts"]),
-                    }, ("session_id", "rx"))
-                live.last_status_key = key
+            rx = self._save_rx(live, wall)
             since = None if live.last_receive_wall is None else round(max(0.0, wall - live.last_receive_wall), 1)
             self._publish(live, {"type": "status", "rx": rx, "seconds_since_last_packet": since,
                                  "last_packet_at": live.last_packet_ts})
@@ -393,36 +454,109 @@ class SessionManager:
                 self._flush(live)
                 live.last_flush_wall = wall
 
+    def _save_rx(self, live: LiveSession, wall: float, force: bool = False) -> list[dict]:
+        rx = self._rx_status(live, wall)
+        key = tuple(r["status"] for r in rx)
+        if force or key != live.last_status_key:
+            for r in rx:
+                self.repos.device_status.upsert({
+                    "session_id": live.id,
+                    "rx": r["rx"],
+                    "status": r["status"],
+                    "packet_rate": r["packet_rate"],
+                    "last_packet_at": None if r["last_packet_ts"] is None else to_iso(r["last_packet_ts"]),
+                }, ("session_id", "rx"))
+            live.last_status_key = key
+        return rx
+
+    @staticmethod
+    def _rx_entry(rx: str, status: str, rate: float, last_ts: float | None) -> dict:
+        return {"rx": rx, "status": status, "status_ko": RX_STATUS_KO[status], "packet_rate": rate,
+                "last_packet_ts": last_ts}
+
     def _rx_status(self, live: LiveSession, wall: float) -> list[dict]:
-        if live.clock_offset is None:
+        if live.clock_offset is not None:
+            return live.engine.rx_status(wall - live.clock_offset)
+        if not live.restored_rx:
             return live.engine.rx_status()
-        return live.engine.rx_status(wall - live.clock_offset)
+        out = []
+        for r in live.restored_rx:
+            last = r["last_packet_ts"]
+            status = "lost" if last is not None and wall - last > self.settings.rx_lost_sec else r["status"]
+            out.append(self._rx_entry(r["rx"], status, 0.0 if status == "lost" else r["packet_rate"], last))
+        return out
+
+    def _stored_rx(self, session_id: str) -> list[dict]:
+        rows = {r["rx"]: r for r in self.repos.device_status.list({"session_id": session_id})}
+        if not rows:
+            return []
+        return [self._rx_entry(rx, rows[rx]["status"], float(rows[rx].get("packet_rate") or 0.0),
+                               from_iso(rows[rx].get("last_packet_at"))) if rx in rows
+                else self._rx_entry(rx, "none", 0.0, None) for rx in RX_IDS]
+
+    def _latest_stored_frame(self, session_id: str) -> dict | None:
+        rows = self.repos.signal_frames.list({"session_id": session_id}, order_by="ts", desc=True, limit=1)
+        return _row_frame(rows[0]) if rows else None
+
+    def _live_events(self, live: LiveSession) -> list[dict]:
+        merged = dict(live.retired_events)
+        merged.update({e["id"]: e for e in live.engine.events()})
+        return [merged[k] for k in sorted(merged)]
+
+    def _new_segment(self, live: LiveSession) -> list[Frame]:
+        tail = live.engine.flush()
+        for e in live.engine.events():
+            live.retired_events[e["id"]] = {**e, "ongoing": False}
+        known = [*live.retired_events, *live.saved_events]
+        live.engine = build_engine(self.settings)
+        live.engine.continue_event_numbers(max(known, default=0) + 1)
+        live.clock_offset = None
+        log.info("session %s: timestamp gap over %.0fs, started a new engine segment", live.id,
+                 self.settings.max_gap_sec)
+        return tail
 
     def _accept_frames(self, live: LiveSession, frames: list[Frame]) -> None:
         if not frames:
             return
         live.frames.extend(frames)
-        live.pending.extend(frames)
+        live.pending.extend((str(uuid.uuid4()), f) for f in frames)
         overflow = len(live.pending) - self.buffer_size
         if overflow > 0:
             del live.pending[:overflow]
         self._publish(live, {"type": "frames", "frames": [f.to_dict() for f in frames]})
         for f in frames:
             if f.alert:
+                live.alert_messages[f.event_id] = f.alert
                 self._publish(live, {"type": "alert", "ts": f.ts, "event_id": f.event_id, "message": f.alert})
 
     def _flush(self, live: LiveSession) -> None:
-        if not live.pending:
-            return
-        batch = live.pending[:]
+        if live.pending:
+            batch = live.pending[:]
+            try:
+                self.repos.signal_frames.insert_many([_frame_row(live.id, fid, f) for fid, f in batch])
+            except Exception:
+                log.exception("frame flush failed for session %s (%d pending)", live.id, len(batch))
+            else:
+                del live.pending[:len(batch)]
         try:
-            self.repos.signal_frames.insert_many([_frame_row(live.id, f) for f in batch])
-            if live.last_packet_ts is not None:
-                self.repos.sessions.update(live.id, {"last_packet_at": to_iso(live.last_packet_ts)})
+            self._persist_events(live)
         except Exception:
-            log.exception("frame flush failed for session %s (%d pending)", live.id, len(batch))
-            return
-        del live.pending[:len(batch)]
+            log.exception("event save failed for session %s", live.id)
+        if live.last_packet_ts is not None and live.last_packet_ts != live.saved_last_packet:
+            try:
+                self.repos.sessions.update(live.id, {"last_packet_at": to_iso(live.last_packet_ts)})
+                live.saved_last_packet = live.last_packet_ts
+            except Exception:
+                log.exception("session update failed for session %s", live.id)
+
+    def _persist_events(self, live: LiveSession) -> None:
+        for e in self._live_events(live):
+            key = _event_key(e)
+            if live.saved_events.get(e["id"]) == key:
+                continue
+            self.repos.activity_events.upsert(_event_row(live.id, e, live.alert_messages.get(e["id"])),
+                                              ("session_id", "analysis_id", "event_no"))
+            live.saved_events[e["id"]] = key
 
     def _publish(self, live: LiveSession, message: dict[str, Any]) -> None:
         for sub in list(live.subscribers):
@@ -461,9 +595,28 @@ class SessionManager:
                 live = LiveSession(row=row, engine=build_engine(self.settings),
                                    frames=deque(maxlen=self.buffer_size))
                 if resume:
-                    live.frames.extend(self._restore_frames(row["id"]))
+                    self._resume(live)
                 self.live[row["id"]] = live
             return live
+
+    def _resume(self, live: LiveSession) -> None:
+        live.frames.extend(self._restore_frames(live.id))
+        last_packet = from_iso(live.row.get("last_packet_at"))
+        marks = [t for t in (last_packet, live.frames[-1].ts if live.frames else None) if t is not None]
+        if marks:
+            live.polled_until = max(marks)
+            live.last_packet_ts = last_packet
+            live.saved_last_packet = last_packet
+        try:
+            stored = self.repos.activity_events.list({"session_id": live.id})
+            live.saved_events = {r["event_no"]: _event_key(_row_event(r, None)) for r in stored}
+            live.alert_messages = {r["event_no"]: r.get("alert_message") for r in stored}
+            live.restored_rx = self._stored_rx(live.id)
+        except Exception:
+            log.exception("could not restore events or receiver state for session %s", live.id)
+        live.engine.continue_event_numbers(max(live.saved_events, default=0) + 1)
+        log.info("resumed session %s: %d frames, %d events, packets accepted after %s", live.id, len(live.frames),
+                 len(live.saved_events), live.polled_until)
 
     def _restore_frames(self, session_id: str) -> list[Frame]:
         try:
