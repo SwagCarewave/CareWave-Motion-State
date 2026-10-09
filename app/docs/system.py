@@ -2,12 +2,7 @@ from __future__ import annotations
 
 HEALTH = {
     "summary": "서버 상태 확인",
-    "description": "서버 동작, 최종 모델 해시 검사, DB·Storage 연결 상태를 확인합니다.",
-}
-
-MODEL = {
-    "summary": "모델 정보 조회",
-    "description": "판정에 사용 중인 최종 모델의 종류, 특징 수, 기준값, 해시를 반환합니다.",
+    "description": "서버 동작, 최종 모델 해시 검사, DB·Storage 연결 상태, ESP CSI UDP 수신 상태를 확인합니다.",
 }
 
 CODES = {

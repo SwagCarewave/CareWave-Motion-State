@@ -6,6 +6,7 @@ from typing import Any, Callable
 from app.repositories import Repositories, RepositoryError
 from app.services.engine import FINAL_GUARDIAN_RESULTS
 from app.services.monitoring import SessionManager
+from app.services.series import event_label
 from app.timeutil import from_iso, to_iso
 
 EVENT_TITLE = "지속 활동 감지"
@@ -29,10 +30,12 @@ def _fetch_all(table, filters: dict | None, order_by: str) -> list[dict]:
 
 
 class EventService:
-    def __init__(self, repos: Repositories, sessions: SessionManager, clock: Callable[[], float] = time.time):
+    def __init__(self, repos: Repositories, sessions: SessionManager, clock: Callable[[], float] = time.time,
+                 burst_sec: float = 10.0):
         self.repos = repos
         self.sessions = sessions
         self.clock = clock
+        self.burst_sec = burst_sec
 
     def list(self, session_id: str | None = None, analysis_id: str | None = None, status: str = "all",
              order: str = "asc", limit: int = 50, offset: int = 0) -> dict:
@@ -96,14 +99,15 @@ class EventService:
                 if r["session_id"] not in live_cache:
                     live_cache[r["session_id"]] = self.sessions.live_event_state(r["session_id"])
                 live = live_cache[r["session_id"]].get(r["event_no"], {})
-            out.append(self._view(r, confirmations.get(r["id"]), live))
+            out.append(self._view(r, confirmations.get(r["id"]), live, self.burst_sec))
         return out
 
     @staticmethod
-    def _view(row: dict, confirmation: dict | None, live: dict) -> dict:
+    def _view(row: dict, confirmation: dict | None, live: dict, burst_sec: float) -> dict:
         result = confirmation["result"] if confirmation else None
         ongoing = bool(live.get("ongoing"))
         ended = live.get("end_ts") if live else from_iso(row.get("ended_at"))
+        duration = live.get("duration_sec", row.get("duration_sec") or 0.0)
         return {
             "id": row["id"],
             "number": row["event_no"],
@@ -114,7 +118,8 @@ class EventService:
             "started_at": live.get("start_ts") or from_iso(row["started_at"]),
             "alerted_at": live.get("alert_ts") or from_iso(row["alerted_at"]),
             "ended_at": ended,
-            "duration_sec": live.get("duration_sec", row.get("duration_sec") or 0.0),
+            "duration_sec": duration,
+            "label": event_label(duration, burst_sec),
             "ongoing": ongoing,
             "alert_message": row.get("alert_message"),
             "status": "confirmed" if result else "unconfirmed",

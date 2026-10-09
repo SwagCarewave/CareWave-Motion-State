@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.codes import (GUARDIAN_DOC, RX_ID_DOC, RX_STATUS_DOC, SESSION_STATUS_DOC, STATE_DOC, MonitorState,
-                               RxId, RxStatus, SessionStatus)
+from app.schemas.codes import (EVENT_LABEL_DOC, GUARDIAN_DOC, RX_ID_DOC, RX_STATUS_DOC, SESSION_STATUS_DOC,
+                               STATE_DOC, MonitorState, RxId, RxStatus, SessionStatus)
 
 
 class PacketIn(BaseModel):
@@ -28,7 +28,7 @@ class IngestOut(BaseModel):
     accepted: int = Field(description="엔진에 들어간 패킷 수")
     rejected_invalid: int = Field(description="시각·수신기 값이 잘못됐거나 서버 시각보다 1시간 넘게 미래라 버린 패킷 수")
     rejected_incomplete: int = Field(description="진폭이 52개가 아니거나 빈 값이 있어 버린 패킷 수")
-    rejected_stale: int = Field(description="이미 받은 시각보다 이르거나 같아(중복·역순) 버린 패킷 수")
+    rejected_stale: int = Field(description="같은 수신기에서 이미 받은 시각보다 이르거나, 같은 시각에 같은 진폭이라(중복·역순) 버린 패킷 수")
     frames: int = Field(description="이번 묶음으로 새로 계산된 0.5초 프레임 수")
 
 
@@ -82,6 +82,7 @@ class SessionStartOut(SessionOut):
 class EventMarkerOut(BaseModel):
     id: int = Field(description="사건 번호")
     uuid: str | None = Field(default=None, description="사건 ID (GET /api/events/{id} 의 id)")
+    label: str = Field(default="짧은 움직임", description=f"그래프 표시 문구. {EVENT_LABEL_DOC}")
     start_ts: float = Field(description="활동 시작 시각")
     alert_ts: float = Field(description="알림 시각")
     end_ts: float | None = Field(description="감지 종료 시각 (진행 중이면 null)")

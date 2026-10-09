@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.codes import EVENT_STATUS_DOC, GUARDIAN_DOC, EventStatus, GuardianResult
+from app.schemas.codes import EVENT_LABEL_DOC, EVENT_STATUS_DOC, GUARDIAN_DOC, EventStatus, GuardianResult
 
 _EXAMPLE = {
     "id": "0b6f8c1e-6a0f-4f7e-9d3a-2a51c4e7d9b0",
@@ -37,6 +37,7 @@ class EventOut(BaseModel):
     alerted_at: float = Field(description="알림 시각")
     ended_at: float | None = Field(description="감지 종료 시각 (활동 중이면 null)")
     duration_sec: float = Field(description="지속 시간(초)")
+    label: str = Field(description=f"그래프 표시 문구. {EVENT_LABEL_DOC}")
     ongoing: bool = Field(description="지금도 활동이 감지되는 중인지 (보호자 확인 여부와 무관)")
     alert_message: str | None = Field(description="알림 문구")
     status: EventStatus = Field(description=f"확인 상태. {EVENT_STATUS_DOC}")
