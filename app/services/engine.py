@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -151,6 +152,9 @@ class MotionEngine:
                 self.monitor.guardian_close(event_id, result)
                 return self._event(e)
         raise KeyError(event_id)
+
+    def continue_event_numbers(self, next_no: int) -> None:
+        self.monitor.ids = itertools.count(max(1, next_no))
 
     def summary(self) -> dict:
         return self.monitor.summary()

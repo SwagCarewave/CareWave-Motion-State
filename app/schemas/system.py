@@ -50,3 +50,14 @@ class ErrorDetail(BaseModel):
 
 class ErrorOut(BaseModel):
     error: ErrorDetail
+
+
+class CodesOut(BaseModel):
+    session_status: list[dict] = Field(description="세션 상태 code·label")
+    rx: list[str] = Field(description="수신기 이름")
+    rx_status: list[dict] = Field(description="RX 연결 상태 code·label·rule")
+    state: list[dict] = Field(description="관찰 상태 code·label·rule")
+    guardian_result: list[str] = Field(description="보호자 확인 결과로 보낼 수 있는 값")
+    signal_window: list[dict] = Field(description="그래프 기간 선택지 seconds·label")
+    stream_message: list[dict] = Field(description="WebSocket 메시지 type·rule")
+    error: list[dict] = Field(description="오류 code·http·meaning")

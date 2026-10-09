@@ -74,3 +74,19 @@ Holdout 녹화 10개는 저장소에 없습니다(평가용으로 따로 보관)
 - `scripts\migrate.py`는 `supabase/migrations`의 SQL을 순서대로 적용합니다 (`--apply` 없이 실행하면 목록만 확인).
 
 API 문서는 서버 실행 후 `http://localhost:8000/docs`(Swagger)에서 볼 수 있고, 설정 예시는 `.env.example`에 있습니다. 서버는 시작할 때 최종 모델(`models/lying_walking_v2.pkl`) 해시를 검사합니다.
+
+### 실시간 CSI 보내기 (수집기 브리지)
+
+수집기 출력(원시 CSV와 같은 열)을 API로 묶어서 보냅니다. 서버가 잠시 멈춰도 버퍼에 보관했다가 다시 보냅니다.
+
+```
+# PowerShell
+<수집기> | .venv\Scripts\python scripts\collector_bridge.py --stdin
+.venv\Scripts\python scripts\collector_bridge.py --replay data\raw_csi\test\yena_test_02_csi_raw.csv
+
+# Git Bash
+<수집기> | .venv/Scripts/python scripts/collector_bridge.py --stdin
+.venv/Scripts/python scripts/collector_bridge.py --replay data/raw_csi/test/yena_test_02_csi_raw.csv
+```
+
+`--replay`는 저장된 CSV를 지금 시각으로 옮겨 실시간처럼 보냅니다(`--speed 4`로 배속). 실시간 그래프는 `/ws/sessions/{id}` WebSocket으로 받습니다.

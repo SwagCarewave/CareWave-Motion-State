@@ -59,3 +59,25 @@ def test_health_degraded_when_backend_rejects(client):
     assert res.json()["status"] == "degraded"
     assert res.json()["checks"] == {"database": "error", "storage": "error"}
     assert "Invalid API key" not in res.text
+
+
+def test_codes_match_engine_constants(client):
+    from typing import get_args
+
+    from app.schemas.codes import GuardianResult, MonitorState, RxId, RxStatus
+    from app.services.engine import FINAL_GUARDIAN_RESULTS, RX_STATUS_KO
+    from motion_state.csi_io import RX_IDS
+    from motion_state.monitor_v2 import STATE_KO
+
+    assert get_args(MonitorState) == tuple(STATE_KO)
+    assert get_args(RxStatus) == tuple(RX_STATUS_KO)
+    assert get_args(RxId) == tuple(RX_IDS)
+    assert get_args(GuardianResult) == FINAL_GUARDIAN_RESULTS
+
+    body = client.get("/api/codes").json()
+    assert [s["code"] for s in body["state"]] == list(STATE_KO)
+    assert body["guardian_result"] == list(FINAL_GUARDIAN_RESULTS)
+    assert {e["code"] for e in body["error"]} >= {"session_not_found", "session_stopped", "invalid_request"}
+
+    schema = client.get("/openapi.json").json()["components"]["schemas"]
+    assert schema["RxStatusOut"]["properties"]["status"]["enum"] == list(RX_STATUS_KO)
