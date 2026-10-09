@@ -128,7 +128,7 @@ class FileService:
         for hook in self.on_delete:
             hook(row, analyses)
         self.repos.csv_store.delete([row["storage_path"]])
-        purge_analyses(self.repos, analyses)
+        purge_analyses(self.repos, self.repos.analyses.list({"file_id": file_id}))
         self.repos.csv_files.delete(file_id)
 
     def recover(self) -> None:

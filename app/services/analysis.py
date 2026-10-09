@@ -48,6 +48,8 @@ class AnalysisService:
         self.cancelled: set[str] = set()
         self.cache: OrderedDict[str, dict] = OrderedDict()
         self.lock = threading.RLock()
+        self.finalize_lock = threading.Lock()
+        self.on_retire: list[Callable[[set[str]], None]] = []
         files.on_delete.append(self._on_file_delete)
 
     def recover(self) -> None:
@@ -198,30 +200,36 @@ class AnalysisService:
                     "record_start": table.preview.start_ts, "record_end": table.preview.end_ts}
             payload = gzip.compress(json.dumps({**meta, "columns": points_to_columns(points)},
                                                ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-            if analysis_id in self.cancelled:
-                raise AnalysisCancelled()
-            self.repos.results_store.put(result_path, payload, "application/gzip")
             events = engine.events()
             event_rows = [{"id": str(uuid.uuid4()), "session_id": None, "analysis_id": analysis_id,
                            "event_no": e["id"], "started_at": to_iso(e["start_ts"]),
                            "alerted_at": to_iso(e["alert_ts"]),
                            "ended_at": None if e["end_ts"] is None else to_iso(e["end_ts"]),
                            "duration_sec": e["duration_sec"], "alert_message": alerts.get(e["id"])} for e in events]
-            self.repos.activity_events.insert_many(event_rows)
-            self._carry_confirmations(file_row["id"], analysis_id, event_rows)
             summary = {"record_start": table.preview.start_ts, "record_end": table.preview.end_ts,
                        "duration_sec": table.preview.duration_sec}
-            self._update(analysis_id, {"status": "succeeded", "progress": 1.0, "result_path": result_path,
-                                       "frame_count": len(frames), "event_count": len(events), "summary": summary,
-                                       "error_code": None, "error_message": None,
-                                       "finished_at": to_iso(self.clock())})
-            with self.lock:
-                self.cache[analysis_id] = {"meta": meta, "points": points}
-                while len(self.cache) > self.settings.results_cache_size:
-                    self.cache.popitem(last=False)
+            with self.finalize_lock:
+                if analysis_id in self.cancelled:
+                    raise AnalysisCancelled()
+                self.repos.results_store.put(result_path, payload, "application/gzip")
+                self.repos.activity_events.insert_many(event_rows)
+                self._carry_confirmations(file_row["id"], analysis_id, event_rows)
+                updated = self.repos.analyses.update(analysis_id, {
+                    "status": "succeeded", "progress": 1.0, "result_path": result_path, "frame_count": len(frames),
+                    "event_count": len(events), "summary": summary, "error_code": None, "error_message": None,
+                    "finished_at": to_iso(self.clock())})
+                if updated is None:
+                    raise AnalysisCancelled()
+                with self.lock:
+                    self.cache[analysis_id] = {"meta": meta, "points": points}
+                    while len(self.cache) > self.settings.results_cache_size:
+                        self.cache.popitem(last=False)
             self._retire_previous(file_row["id"], analysis_id)
         except AnalysisCancelled:
-            self._cleanup_partial(analysis_id, result_path)
+            with self.finalize_lock:
+                self._cleanup_partial(analysis_id, result_path)
+                with self.lock:
+                    self.cache.pop(analysis_id, None)
             self._fail(analysis_id, "cancelled")
         except CsvValidationError as exc:
             self._fail(analysis_id, exc.code, exc.message)
@@ -266,6 +274,9 @@ class AnalysisService:
         with self.lock:
             for a in old:
                 self.cache.pop(a["id"], None)
+        if old:
+            for hook in self.on_retire:
+                hook({a["id"] for a in old})
 
     def _cleanup_partial(self, analysis_id: str, result_path: str) -> None:
         try:
@@ -291,8 +302,9 @@ class AnalysisService:
                 time.sleep(0.5 * (attempt + 1))
 
     def _on_file_delete(self, file_row: dict, analyses: list[dict]) -> None:
-        for a in analyses:
-            if a["status"] in ACTIVE_ANALYSIS:
-                self.cancelled.add(a["id"])
-            with self.lock:
-                self.cache.pop(a["id"], None)
+        with self.finalize_lock:
+            for a in analyses:
+                if a["status"] in ACTIVE_ANALYSIS:
+                    self.cancelled.add(a["id"])
+                with self.lock:
+                    self.cache.pop(a["id"], None)
