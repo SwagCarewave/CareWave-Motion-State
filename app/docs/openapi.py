@@ -7,11 +7,13 @@ TITLE = "CareWave Motion State API"
 TAG_SYSTEM = "시스템"
 TAG_LIVE = "실시간 관찰"
 TAG_EVENTS = "활동 사건"
+TAG_CSV = "CSV 기록"
 
 TAGS = [
     {"name": TAG_SYSTEM},
     {"name": TAG_LIVE},
     {"name": TAG_EVENTS},
+    {"name": TAG_CSV},
 ]
 
 COMMON_RESPONSES = {

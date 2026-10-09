@@ -9,6 +9,7 @@ from starlette.exceptions import HTTPException
 from app.repositories import BackendUnavailable, RepositoryError
 from app.services.csv_reader import CsvValidationError
 from app.services.events import EventNotFound
+from app.services.exceptions import ServiceError
 from app.services.monitoring import SessionNotFound, SessionStopped
 
 
@@ -48,6 +49,10 @@ def install_error_handlers(app: FastAPI) -> None:
     async def session_missing(_: Request, exc: SessionNotFound) -> JSONResponse:
         return JSONResponse(_body("session_not_found", "관찰 세션을 찾을 수 없습니다.", {"session_id": str(exc)}),
                             status_code=404)
+
+    @app.exception_handler(ServiceError)
+    async def service_error(_: Request, exc: ServiceError) -> JSONResponse:
+        return JSONResponse(_body(exc.code, exc.message, exc.detail), status_code=exc.status)
 
     @app.exception_handler(EventNotFound)
     async def event_missing(_: Request, exc: EventNotFound) -> JSONResponse:

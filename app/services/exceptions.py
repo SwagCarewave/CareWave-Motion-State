@@ -1,0 +1,14 @@
+from __future__ import annotations
+
+
+class ServiceError(Exception):
+    def __init__(self, status: int, code: str, message: str, detail: dict | None = None):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+        self.detail = detail or {}
+
+
+def not_found(code: str, message: str, key: str, value: str) -> ServiceError:
+    return ServiceError(404, code, message, {key: value})
