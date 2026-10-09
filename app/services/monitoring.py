@@ -295,11 +295,6 @@ class SessionManager:
                 live.clock_offset = wall - live.last_packet_ts
                 live.polled_until = None
             self._accept_frames(live, new_frames)
-            if any(f.alert for f in new_frames):
-                try:
-                    self._persist_events(live)
-                except Exception:
-                    log.exception("immediate event save failed for session %s", live.id)
         result.frames = len(new_frames)
         return result
 
@@ -356,6 +351,20 @@ class SessionManager:
             return {}
         with live.lock:
             return {e["id"]: e for e in self._live_events(live)}
+
+    def find_live_event(self, event_uuid: str) -> dict | None:
+        for live in list(self.live.values()):
+            with live.lock:
+                number = next((n for n, u in live.event_uuids.items() if u == event_uuid), None)
+                if number is None:
+                    continue
+                e = next((x for x in self._live_events(live) if x["id"] == number), None)
+                if e is None:
+                    continue
+                row = _event_row(live.id, event_uuid, e, live.alert_messages.get(number))
+                row["created_at"] = row["started_at"]
+                return row
+        return None
 
     def close_live_event(self, session_id: str, number: int, result: str) -> None:
         live = self.live.get(session_id)
@@ -557,12 +566,19 @@ class SessionManager:
         if overflow > 0:
             del live.pending[:overflow]
         self._publish(live, {"type": "frames", "frames": [f.to_dict() for f in frames]})
-        for f in frames:
-            if f.alert:
-                live.alert_messages[f.event_id] = f.alert
-                event_uuid = live.event_uuids.setdefault(f.event_id, str(uuid.uuid4()))
-                self._publish(live, {"type": "alert", "ts": f.ts, "event_id": f.event_id, "event_uuid": event_uuid,
-                                     "message": f.alert})
+        alerts = [f for f in frames if f.alert]
+        if not alerts:
+            return
+        for f in alerts:
+            live.alert_messages[f.event_id] = f.alert
+            live.event_uuids.setdefault(f.event_id, str(uuid.uuid4()))
+        try:
+            self._persist_events(live)
+        except Exception:
+            log.exception("event save before alert failed for session %s", live.id)
+        for f in alerts:
+            self._publish(live, {"type": "alert", "ts": f.ts, "event_id": f.event_id,
+                                 "event_uuid": live.event_uuids[f.event_id], "message": f.alert})
 
     def _flush(self, live: LiveSession) -> None:
         if live.pending:

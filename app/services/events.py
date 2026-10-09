@@ -74,6 +74,8 @@ class EventService:
                 raise EventNotFound(event_id) from exc
             raise
         if row is None:
+            row = self.sessions.find_live_event(event_id)
+        if row is None:
             raise EventNotFound(event_id)
         return row
 
@@ -100,7 +102,7 @@ class EventService:
     @staticmethod
     def _view(row: dict, confirmation: dict | None, live: dict) -> dict:
         result = confirmation["result"] if confirmation else None
-        ongoing = bool(live.get("ongoing")) and result is None
+        ongoing = bool(live.get("ongoing"))
         ended = live.get("end_ts") if live else from_iso(row.get("ended_at"))
         return {
             "id": row["id"],

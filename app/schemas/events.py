@@ -37,7 +37,7 @@ class EventOut(BaseModel):
     alerted_at: float = Field(description="알림 시각")
     ended_at: float | None = Field(description="감지 종료 시각 (활동 중이면 null)")
     duration_sec: float = Field(description="지속 시간(초)")
-    ongoing: bool = Field(description="지금도 활동이 이어지는 중인지")
+    ongoing: bool = Field(description="지금도 활동이 감지되는 중인지 (보호자 확인 여부와 무관)")
     alert_message: str | None = Field(description="알림 문구")
     status: EventStatus = Field(description=f"확인 상태. {EVENT_STATUS_DOC}")
     status_ko: str = Field(description="목록·상세에 표시할 확인 상태 문구 (예: 보호자 확인 대기, 정상 활동 확인 완료)")
