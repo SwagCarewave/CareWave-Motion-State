@@ -61,3 +61,16 @@ Holdout 녹화 10개는 저장소에 없습니다(평가용으로 따로 보관)
 | `motion_state/` | 전처리, 특징, 실시간 감지기·모니터 |
 | `models/` | 학습된 모델 |
 | `outputs/` | 실행하면 생기는 캐시·결과 (저장소에 없음) |
+
+## 6. 백엔드 API
+
+```
+.venv\Scripts\python scripts\migrate.py --apply
+.venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
+.venv\Scripts\python -m pytest
+```
+
+- `.env.example`을 `.env`로 복사하고 Supabase 값을 넣습니다. `CAREWAVE_STORAGE_BACKEND=memory`면 Supabase 없이 로컬에서 실행됩니다.
+- `scripts\migrate.py`는 `supabase/migrations`의 SQL을 순서대로 적용합니다 (`--apply` 없이 실행하면 목록만 확인).
+
+API 문서는 서버 실행 후 `http://localhost:8000/docs`(Swagger)에서 볼 수 있고, 설정 예시는 `.env.example`에 있습니다. 서버는 시작할 때 최종 모델(`models/lying_walking_v2.pkl`) 해시를 검사합니다.
