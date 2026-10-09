@@ -262,7 +262,8 @@ def test_replay_requires_finished_analysis(csv_client, sample_csv):
 def test_replay_websocket_streams_frames(csv_client, sample_csv):
     _, analysis = _analyzed(csv_client, sample_csv)
     replays = csv_client.app.state.replays
-    rid = csv_client.post("/api/replays", json={"analysis_id": analysis["id"], "speed": 16}).json()["id"]
+    created = csv_client.post("/api/replays", json={"analysis_id": analysis["id"], "speed": 16}).json()
+    rid, start = created["id"], created["from_ts"]
     with csv_client.websocket_connect(f"/ws/replays/{rid}") as ws:
         first = ws.receive_json()
         assert first["type"] == "state" and first["replay"]["status"] == "paused"
@@ -271,12 +272,16 @@ def test_replay_websocket_streams_frames(csv_client, sample_csv):
         replays.tick()
         csv_client.clock.now += 0.5
         replays.tick()
-        tick = ws.receive_json()
-        while tick["type"] != "tick" or not tick["frames"]:
+        frames, position = [], None
+        while position is None or position < start + 8 - 1e-3:
             tick = ws.receive_json()
-        assert len(tick["frames"]) == 16
-        assert tick["frames"][-1]["ts"] <= tick["replay"]["position_ts"]
-        assert len(tick["frames"][0]["heatmap"]) == 52
+            if tick["type"] == "tick":
+                frames += tick["frames"]
+                position = tick["replay"]["position_ts"]
+        assert len(frames) == 17
+        assert frames[0]["ts"] == start
+        assert frames[-1]["ts"] <= position
+        assert len(frames[0]["heatmap"]) == 52
 
 
 def test_delete_cleans_everything(csv_client, sample_csv):
@@ -364,3 +369,92 @@ def test_event_labels_follow_duration(tmp_path, sample_csv):
         assert [(m["duration_sec"], m["label"]) for m in markers] == [(16.5, "짧은 움직임"), (21.5, "움직임 급증")]
         items = c.get("/api/events", params={"analysis_id": analysis["id"]}).json()["items"]
         assert [e["label"] for e in items] == ["짧은 움직임", "움직임 급증"]
+
+
+def test_replay_first_tick_includes_frames_from_start(csv_client, sample_csv):
+    _, analysis = _analyzed(csv_client, sample_csv)
+    replays = csv_client.app.state.replays
+    created = csv_client.post("/api/replays", json={"analysis_id": analysis["id"], "speed": 16, "play": True}).json()
+    sub_frames = []
+    with csv_client.websocket_connect(f"/ws/replays/{created['id']}") as ws:
+        ws.receive_json()
+        for _ in range(4):
+            csv_client.clock.now += 0.5
+            replays.tick()
+        position = None
+        while position is None or position < created["from_ts"] + 32 - 1e-3:
+            message = ws.receive_json()
+            if message["type"] == "tick":
+                sub_frames += message["frames"]
+                position = message["replay"]["position_ts"]
+    signals = csv_client.get(f"/api/analyses/{analysis['id']}/signals", params={"max_points": 7200}).json()
+    expected = [t for t in signals["ts"] if created["from_ts"] <= t <= created["from_ts"] + 32]
+    assert [f["ts"] for f in sub_frames] == expected
+
+
+def test_seek_restarts_cursor_at_new_position(csv_client, sample_csv):
+    _, analysis = _analyzed(csv_client, sample_csv)
+    replays = csv_client.app.state.replays
+    rid = csv_client.post("/api/replays", json={"analysis_id": analysis["id"], "speed": 4}).json()["id"]
+    target = csv_client.get(f"/api/replays/{rid}").json()["from_ts"] + 50
+    with csv_client.websocket_connect(f"/ws/replays/{rid}") as ws:
+        ws.receive_json()
+        csv_client.patch(f"/api/replays/{rid}", json={"position_ts": target, "action": "play"})
+        csv_client.clock.now += 1
+        replays.tick()
+        frames = []
+        while not frames:
+            message = ws.receive_json()
+            if message["type"] == "tick":
+                frames = message["frames"]
+        assert frames[0]["ts"] >= target - 0.5
+        assert frames[0]["ts"] <= target + 0.5
+
+
+def test_reanalysis_removes_replays_of_old_analysis(csv_client, sample_csv):
+    file_id, first = _analyzed(csv_client, sample_csv)
+    rid = csv_client.post("/api/replays", json={"analysis_id": first["id"]}).json()["id"]
+    with csv_client.websocket_connect(f"/ws/replays/{rid}") as ws:
+        ws.receive_json()
+        second = _wait(csv_client, csv_client.post(f"/api/files/{file_id}/analyses").json()["id"])
+        assert second["status"] == "succeeded"
+        message = ws.receive_json()
+        while message["type"] != "removed":
+            message = ws.receive_json()
+    assert csv_client.get(f"/api/replays/{rid}").status_code == 404
+
+
+def test_delete_during_finalize_leaves_nothing(csv_client, sample_csv):
+    import threading
+
+    repos = csv_client.app.state.repos
+    events_table = repos.activity_events
+    file_id = _upload(csv_client, sample_csv).json()["id"]
+    done = {}
+
+    class SlowEvents:
+        def __getattr__(self, name):
+            return getattr(events_table, name)
+
+        def insert_many(self, rows):
+            out = events_table.insert_many(rows)
+            worker = threading.Thread(target=lambda: done.setdefault(
+                "status", csv_client.delete(f"/api/files/{file_id}").status_code))
+            worker.start()
+            time.sleep(0.3)
+            done["thread"] = worker
+            return out
+
+    from dataclasses import replace as dc_replace
+    analyses = csv_client.app.state.analyses
+    analyses.repos = dc_replace(repos, activity_events=SlowEvents())
+    analysis_id = csv_client.post(f"/api/files/{file_id}/analyses").json()["id"]
+    end = time.monotonic() + 60
+    while "thread" not in done and time.monotonic() < end:
+        time.sleep(0.05)
+    done["thread"].join(30)
+    assert done["status"] == 204
+    assert repos.analyses.get(analysis_id) is None
+    assert events_table.list({"analysis_id": analysis_id}) == []
+    assert not repos.results_store.exists(f"{analysis_id}.json.gz")
+    assert analysis_id not in analyses.cache

@@ -182,3 +182,38 @@ def _until(check, timeout=20.0):
             return
         time.sleep(0.02)
     raise AssertionError("condition not met in time")
+
+
+def _collector(tmp_path, **overrides):
+    from app.repositories import memory_repositories
+    from app.services.monitoring import SessionManager
+    from app.services.udp_ingest import UdpCollector
+
+    settings = Settings(storage_backend="memory", local_storage_dir=tmp_path / "s", tick_sec=3600, **overrides)
+    manager = SessionManager(settings, memory_repositories(settings.local_storage_dir), "sha")
+    return UdpCollector(settings, manager), manager
+
+
+def test_udp_batch_follows_a_restarted_session(tmp_path):
+    collector, manager = _collector(tmp_path)
+    old, _ = manager.start()
+    collector.datagram_received(_line(seed=1).encode(), ("10.0.0.5", 4000))
+    collector.flush()
+    manager.stop(old["id"])
+    new, _ = manager.start()
+    collector.datagram_received(_line(seed=2).encode(), ("10.0.0.5", 4000))
+    collector.flush()
+    assert collector.stats["dropped_no_session"] == 0
+    assert collector.stats["accepted"] == 2
+    assert "RX1" in manager.live[new["id"]].last_rx_ts
+
+
+def test_udp_allowlist_rejects_unknown_sources(tmp_path):
+    collector, manager = _collector(tmp_path, udp_allowed_sources=("192.168.0.21",))
+    manager.start()
+    collector.datagram_received(_line(seed=1).encode(), ("192.168.0.99", 4000))
+    collector.datagram_received(_line(seed=2).encode(), ("192.168.0.21", 4000))
+    collector.flush()
+    assert collector.stats["rejected_source"] == 1
+    assert collector.stats["accepted"] == 1
+    assert collector.status()["allowed_sources"] == ["192.168.0.21"]
