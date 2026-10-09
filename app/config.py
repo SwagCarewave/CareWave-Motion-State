@@ -48,6 +48,11 @@ class Settings:
     rx_weak_rate: float = 3.0
     rx_rate_window_sec: float = 2.0
     rx_lost_sec: float = 5.0
+    tick_sec: float = 1.0
+    stall_sec: float = 3.0
+    frame_flush_sec: float = 2.0
+    purge_interval_sec: float = 300.0
+    max_packets_per_request: int = 5000
     supabase_url: str | None = None
     supabase_key: str | None = None
     supabase_db_host: str | None = None
