@@ -26,6 +26,7 @@ class CsvValidationError(ValueError):
 class CsvPreview:
     rows: int
     packets: int
+    incomplete_rows: int
     receivers: list[str]
     packets_by_rx: dict[str, int]
     start_ts: float
@@ -39,6 +40,7 @@ class CsvPreview:
         return {
             "rows": self.rows,
             "packets": self.packets,
+            "incomplete_rows": self.incomplete_rows,
             "receivers": self.receivers,
             "packets_by_rx": self.packets_by_rx,
             "start_ts": self.start_ts,
@@ -63,7 +65,8 @@ class CsiTable:
 def load_csi_csv(path: Path) -> CsiTable:
     try:
         raw = read_raw_csi(Path(path))
-    except (UnicodeDecodeError, StopIteration, csv.Error, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+    except (UnicodeDecodeError, StopIteration, ValueError, csv.Error, pd.errors.EmptyDataError,
+            pd.errors.ParserError) as exc:
         raise CsvValidationError("invalid_format", "CSV 파일 형식이 올바르지 않습니다.", {"reason": str(exc)}) from exc
     missing = [c for c in REQUIRED_COLUMNS if c not in raw.columns]
     if missing:
@@ -73,8 +76,10 @@ def load_csi_csv(path: Path) -> CsiTable:
     ts = pd.to_datetime(raw["timestamp"], utc=True, errors="coerce", format="mixed")
     rx = raw["rx"].astype(str).str.strip().str.upper()
     amp = raw[SUB_COLS].apply(pd.to_numeric, errors="coerce")
-    keep = ts.notna() & rx.isin(RX_IDS)
-    if not (keep & amp.notna().all(axis=1)).any():
+    located = ts.notna() & rx.isin(RX_IDS)
+    complete = amp.notna().all(axis=1)
+    keep = located & complete
+    if not keep.any():
         raise CsvValidationError("no_valid_rows", "분석할 수 있는 CSI 행이 없습니다. 타임스탬프와 수신기 값을 확인하세요.",
                                  {"rows": rows})
     order = np.argsort(ts[keep].to_numpy(), kind="stable")
@@ -87,6 +92,7 @@ def load_csi_csv(path: Path) -> CsiTable:
     preview = CsvPreview(
         rows=rows,
         packets=len(offset),
+        incomplete_rows=int((located & ~complete).sum()),
         receivers=list(counts),
         packets_by_rx=counts,
         start_ts=origin,
