@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import sys
 import time
 from collections import deque
@@ -19,6 +20,14 @@ from motion_state.csi_io import N_SUB
 SUB = [f"sub_{i}" for i in range(N_SUB)]
 
 
+def _num(text: str) -> float | None:
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
 def read_rows(source) -> Iterator[dict]:
     reader = csv.reader(source)
     header = next(reader)
@@ -34,7 +43,7 @@ def read_rows(source) -> Iterator[dict]:
             ts = parse_ts(row[col["timestamp"]])
         except ValueError:
             continue
-        amp = [float(row[i]) if i < len(row) and row[i].strip() else None for i in idx]
+        amp = [_num(row[i]) if i < len(row) else None for i in idx]
         yield {"ts": ts, "rx": row[col["rx"]].strip().upper(), "amplitude": amp}
 
 
