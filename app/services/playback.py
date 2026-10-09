@@ -17,6 +17,7 @@ from app.services.monitoring import Subscriber
 log = logging.getLogger("carewave.playback")
 
 SPEEDS = (1, 4, 16)
+CURSOR_EPS = 1e-6
 
 
 @dataclass
@@ -45,17 +46,21 @@ class ReplayManager:
         self.replays: dict[str, Replay] = {}
         self.lock = threading.RLock()
         analyses.files.on_delete.append(self._on_file_delete)
+        analyses.on_retire.append(self._remove_for)
 
     def create(self, analysis_id: str, from_ts: float | None = None, to_ts: float | None = None, speed: int = 1,
                position_ts: float | None = None, play: bool = False) -> dict:
-        meta, _ = self.analyses.points(analysis_id)
+        meta, points = self.analyses.points(analysis_id)
         start, end = meta["record_start"], meta["record_end"]
+        if points:
+            start, end = min(start, points[0]["ts"]), max(end, points[-1]["ts"])
         lo, hi = self._range(start, end, from_ts, to_ts)
         now = self.clock()
         replay = Replay(id=str(uuid.uuid4()), analysis_id=analysis_id, file_id=meta.get("file_id"),
                         record_start=start, record_end=end, from_ts=lo, to_ts=hi, speed=self._speed(speed),
                         playing=False, anchor_pos=self._clamp(position_ts if position_ts is not None else lo, lo, hi),
                         anchor_wall=now, last_access=now)
+        replay.sent_until = replay.anchor_pos - CURSOR_EPS
         if play:
             self._play(replay, now)
         with self.lock:
@@ -81,11 +86,12 @@ class ReplayManager:
                                                            from_ts if from_ts is not None else replay.from_ts,
                                                            to_ts if to_ts is not None else replay.to_ts)
                 replay.anchor_pos = self._clamp(replay.anchor_pos, replay.from_ts, replay.to_ts)
+                replay.sent_until = replay.anchor_pos - CURSOR_EPS
             if speed is not None:
                 replay.speed = self._speed(speed)
             if position_ts is not None:
                 replay.anchor_pos = self._clamp(position_ts, replay.from_ts, replay.to_ts)
-                replay.sent_until = None
+                replay.sent_until = replay.anchor_pos - CURSOR_EPS
             if action == "play":
                 self._play(replay, now)
             elif action == "pause":
@@ -145,7 +151,9 @@ class ReplayManager:
         self._publish(replay, {"type": "tick", "replay": view, "frames": frames})
 
     def _on_file_delete(self, file_row: dict, analyses: list[dict]) -> None:
-        ids = {a["id"] for a in analyses}
+        self._remove_for({a["id"] for a in analyses})
+
+    def _remove_for(self, ids: set[str]) -> None:
         with self.lock:
             doomed = [r for r in self.replays.values() if r.analysis_id in ids]
             for r in doomed:
@@ -185,7 +193,7 @@ class ReplayManager:
     def _play(self, replay: Replay, now: float) -> None:
         if replay.anchor_pos >= replay.to_ts:
             replay.anchor_pos = replay.from_ts
-            replay.sent_until = None
+            replay.sent_until = replay.from_ts - CURSOR_EPS
         replay.playing = True
         replay.anchor_wall = now
 
