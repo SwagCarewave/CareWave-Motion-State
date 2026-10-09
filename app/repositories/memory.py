@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -134,7 +135,15 @@ class LocalObjectStore:
     def delete(self, paths: list[str]) -> None:
         with self._lock:
             for path in paths:
-                self._path(path).unlink(missing_ok=True)
+                target = self._path(path)
+                for attempt in range(20):
+                    try:
+                        target.unlink(missing_ok=True)
+                        break
+                    except PermissionError:
+                        if attempt == 19:
+                            raise
+                        time.sleep(0.05)
 
     def exists(self, path: str) -> bool:
         return self._path(path).is_file()

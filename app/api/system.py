@@ -6,7 +6,7 @@ from app import __version__
 from app.docs import system as docs
 from app.docs.openapi import TAG_SYSTEM
 from app.schemas.codes import catalog
-from app.schemas.system import CodesOut, HealthOut, ModelOut
+from app.schemas.system import CodesOut, HealthOut
 
 router = APIRouter(prefix="/api", tags=[TAG_SYSTEM])
 
@@ -21,13 +21,9 @@ def health(request: Request) -> HealthOut:
         model_verified=True,
         storage=state.repos.backend,
         checks=checks,
+        collector=state.udp.status(),
         version=__version__,
     )
-
-
-@router.get("/model", response_model=ModelOut, **docs.MODEL)
-def model(request: Request) -> ModelOut:
-    return ModelOut(**request.app.state.model_info.to_dict())
 
 
 @router.get("/codes", response_model=CodesOut, **docs.CODES)

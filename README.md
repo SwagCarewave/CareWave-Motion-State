@@ -90,3 +90,23 @@ API 문서는 서버 실행 후 `http://localhost:8000/docs`(Swagger)에서 볼 
 ```
 
 `--replay`는 저장된 CSV를 지금 시각으로 옮겨 실시간처럼 보냅니다(`--speed 4`로 배속). 실시간 그래프는 `/ws/sessions/{id}` WebSocket으로 받습니다.
+
+### ESP32 CSI 받기
+
+ESP32는 CSI raw 줄(`CSI_DATA,RX1,<mac>,<rssi>,...,[imag real imag real ...]`)을 UDP로 보냅니다.
+
+- **서버로 바로 받기:** 서버가 켜지면 UDP `5005` 포트에서 받아, 취침 모드가 켜져 있는 세션에 넣습니다(`CAREWAVE_UDP_ENABLED`, `CAREWAVE_UDP_PORT`). 수신 상태는 `/api/health`의 `collector`에서 확인합니다. 배포할 때 UDP 5005 포트를 열어야 합니다.
+- **보내는 곳 제한:** UDP는 인증이 없어서, 포트를 열면 누구나 패킷을 보낼 수 있습니다. ESP 기기(또는 공유기) IP를 `CAREWAVE_UDP_ALLOWED_SOURCES=192.168.0.21,192.168.0.22`처럼 적으면 그 IP에서 온 패킷만 받습니다. 비워 두면 모두 받습니다.
+- **CSV로 저장하기:** 터미널에서 실행하면 학습 데이터와 같은 형식(`experiment_id,timestamp,label,rx,sub_0~sub_51`)으로 저장합니다. 같은 포트를 쓰므로 서버를 끄거나 `--port`를 바꿔서 실행합니다.
+
+```
+# PowerShell
+.venv\Scripts\python scripts\collect_csi.py --label walk
+.venv\Scripts\python scripts\collect_csi.py --label lie_down --duration 600 --out outputs\collected\lie_down_01.csv
+
+# Git Bash
+.venv/Scripts/python scripts/collect_csi.py --label walk
+<시리얼 모니터 출력> | .venv/Scripts/python scripts/collect_csi.py --stdin --label walk
+```
+
+서브캐리어는 ESP32의 64개 중 빈 자리 12개(DC 1개, 가장자리 보호 대역 11개)를 위치로 빼서 항상 52개를 저장합니다.

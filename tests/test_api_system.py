@@ -18,12 +18,8 @@ def test_health(client):
     assert body["checks"] == {"database": "ok", "storage": "ok"}
 
 
-def test_model(client):
-    res = client.get("/api/model")
-    assert res.status_code == 200
-    body = res.json()
-    assert body["sha256"] == FINAL_MODEL_SHA256
-    assert body["feature_count"] == 60
+def test_model_info_endpoint_removed(client):
+    assert client.get("/api/model").status_code == 404
 
 
 def test_unknown_route_uses_error_shape(client):

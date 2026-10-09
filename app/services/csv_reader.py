@@ -62,6 +62,15 @@ class CsiTable:
             yield float(t), str(r), a
 
 
+def _header_missing(path: Path) -> list[str]:
+    try:
+        with Path(path).open(encoding="utf-8-sig", newline="") as handle:
+            header = [h.strip() for h in next(csv.reader(handle), [])]
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return []
+    return [c for c in REQUIRED_COLUMNS if c not in header]
+
+
 def load_csi_csv(path: Path) -> CsiTable:
     try:
         raw = read_raw_csi(Path(path))
@@ -80,6 +89,10 @@ def load_csi_csv(path: Path) -> CsiTable:
     complete = amp.notna().all(axis=1)
     keep = located & complete
     if not keep.any():
+        absent = _header_missing(Path(path))
+        if absent:
+            raise CsvValidationError("missing_columns", "필수 열이 없습니다. 타임스탬프, 수신기, CSI 진폭 항목을 확인하세요.",
+                                     {"missing": absent})
         raise CsvValidationError("no_valid_rows", "분석할 수 있는 CSI 행이 없습니다. 타임스탬프와 수신기 값을 확인하세요.",
                                  {"rows": rows})
     order = np.argsort(ts[keep].to_numpy(), kind="stable")
