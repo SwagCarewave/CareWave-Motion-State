@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Query, Request, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Query, Request, Response, WebSocket, status
 
+from app.api.streaming import pump
 from app.docs import sessions as docs
 from app.docs.openapi import TAG_LIVE
 from app.schemas.codes import SessionStatus
@@ -78,30 +79,4 @@ async def session_stream(websocket: WebSocket, session_id: str) -> None:
     except SessionStopped:
         await websocket.close(code=4409, reason="session stopped")
         return
-    receiver = asyncio.create_task(_drain(websocket))
-    try:
-        await websocket.send_json(snapshot)
-        while True:
-            getter = asyncio.create_task(sub.queue.get())
-            done, _ = await asyncio.wait({getter, receiver}, return_when=asyncio.FIRST_COMPLETED)
-            if receiver in done:
-                getter.cancel()
-                break
-            message = getter.result()
-            await websocket.send_json(message)
-            if message.get("type") == "stopped":
-                await websocket.close(code=1000)
-                break
-    except (WebSocketDisconnect, RuntimeError):
-        pass
-    finally:
-        receiver.cancel()
-        manager.unsubscribe(session_id, sub)
-
-
-async def _drain(websocket: WebSocket) -> None:
-    try:
-        while True:
-            await websocket.receive_text()
-    except (WebSocketDisconnect, RuntimeError):
-        return
+    await pump(websocket, sub, snapshot, "stopped", lambda: manager.unsubscribe(session_id, sub))

@@ -8,13 +8,14 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 import numpy as np
 
 from app.config import Settings
 from app.repositories import Repositories, RepositoryError
 from app.services.engine import RX_STATUS_KO, Frame, MotionEngine, build_engine
+from app.services.series import build_series
 from app.timeutil import from_iso, parse_ts, to_iso
 from motion_state.csi_io import N_SUB, RX_IDS
 from motion_state.monitor_v2 import STATE_KO
@@ -75,6 +76,7 @@ class LiveSession:
     lock: threading.RLock = field(default_factory=threading.RLock)
     pending: list = field(default_factory=list)
     last_rx_ts: dict = field(default_factory=dict)
+    same_ts_seen: dict = field(default_factory=dict)
     last_packet_ts: float | None = None
     last_receive_wall: float | None = None
     clock_offset: float | None = None
@@ -151,33 +153,6 @@ def _row_event(row: dict, guardian: str | None) -> dict:
 
 def _event_key(e: dict) -> tuple:
     return e["start_ts"], e["alert_ts"], e["end_ts"], e["duration_sec"]
-
-
-def _mean(values: Iterable[float | None]) -> float | None:
-    vals = [v for v in values if v is not None]
-    return round(float(np.mean(vals)), 4) if vals else None
-
-
-def downsample(frames: list[dict], max_points: int) -> tuple[list[dict], int]:
-    if not frames or len(frames) <= max_points:
-        return frames, 1
-    size = math.ceil(len(frames) / max_points)
-    out = []
-    for i in range(0, len(frames), size):
-        chunk = frames[i:i + size]
-        rows = [c["heatmap"] for c in chunk if c.get("heatmap")]
-        events = [c["event_id"] for c in chunk if c.get("event_id") is not None]
-        scores = [c["activity_score"] for c in chunk if c.get("activity_score") is not None]
-        out.append({
-            "ts": chunk[0]["ts"],
-            "state": chunk[-1]["state"],
-            "motion_index": _mean(c.get("motion_index") for c in chunk),
-            "activity_score": round(max(scores), 4) if scores else None,
-            "event_id": events[-1] if events else None,
-            "signal_ok": all(c.get("signal_ok", True) for c in chunk),
-            "heatmap": [round(float(v), 2) for v in np.mean(np.array(rows, dtype=float), axis=0)] if rows else None,
-        })
-    return out, size
 
 
 class SessionManager:
@@ -280,11 +255,16 @@ class SessionManager:
         with live.lock:
             for ts, rx, amp in prepared:
                 last = live.last_rx_ts.get(rx)
-                if (last is not None and ts <= last) or (live.polled_until is not None and ts <= live.polled_until):
+                digest = amp.tobytes()
+                if ((last is not None and (ts < last or (ts == last and digest in live.same_ts_seen[rx])))
+                        or (live.polled_until is not None and ts <= live.polled_until)):
                     result.rejected_stale += 1
                     continue
                 if live.last_packet_ts is not None and ts - live.last_packet_ts > self.settings.max_gap_sec:
                     new_frames.extend(self._new_segment(live))
+                if ts != last:
+                    live.same_ts_seen[rx] = set()
+                live.same_ts_seen[rx].add(digest)
                 live.last_rx_ts[rx] = ts
                 live.engine.push(ts, rx, amp)
                 new_frames.extend(live.engine.poll(ts))
@@ -416,24 +396,9 @@ class SessionManager:
         events = self.events(session_id, live)
         end = to_ts if to_ts is not None else (frames[-1]["ts"] if frames else self.clock())
         start = from_ts if from_ts is not None else end - (window_sec or self.settings.live_retention_sec)
-        picked = [f for f in frames if start <= f["ts"] <= end]
-        points, factor = downsample(picked, max_points)
-        return {
-            "session_id": session_id,
-            "from_ts": round(start, 3),
-            "to_ts": round(end, 3),
-            "step_sec": self.settings.frame_step_sec * factor,
-            "activity_threshold": None if threshold is None else round(threshold, 4),
-            "count": len(points),
-            "ts": [p["ts"] for p in points],
-            "motion_index": [p["motion_index"] for p in points],
-            "activity_score": [p["activity_score"] for p in points],
-            "state": [p["state"] for p in points],
-            "event_id": [p["event_id"] for p in points],
-            "signal_ok": [p["signal_ok"] for p in points],
-            "heatmap": [p["heatmap"] for p in points] if heatmap else None,
-            "events": [e for e in events if e["start_ts"] <= end and (e["end_ts"] or end) >= start],
-        }
+        series = build_series(frames, events, start, end, max_points, heatmap, threshold, self.settings.frame_step_sec,
+                              self.settings.event_burst_sec)
+        return {"session_id": session_id, **series}
 
     def snapshot(self, session_id: str, frames: int = 120) -> dict:
         live = self.get(session_id)
