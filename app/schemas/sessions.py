@@ -26,7 +26,7 @@ class PacketBatchIn(BaseModel):
 
 class IngestOut(BaseModel):
     accepted: int = Field(description="엔진에 들어간 패킷 수")
-    rejected_invalid: int = Field(description="시각·수신기 값이 잘못돼 버린 패킷 수")
+    rejected_invalid: int = Field(description="시각·수신기 값이 잘못됐거나 서버 시각보다 1시간 넘게 미래라 버린 패킷 수")
     rejected_incomplete: int = Field(description="진폭이 52개가 아니거나 빈 값이 있어 버린 패킷 수")
     rejected_stale: int = Field(description="이미 받은 시각보다 이르거나 같아(중복·역순) 버린 패킷 수")
     frames: int = Field(description="이번 묶음으로 새로 계산된 0.5초 프레임 수")
