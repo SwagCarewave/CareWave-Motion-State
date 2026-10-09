@@ -20,7 +20,7 @@ class HealthOut(BaseModel):
     model_verified: bool = Field(description="모델 파일 해시 검사 통과 여부")
     storage: str = Field(description="저장소 종류 (memory | supabase)")
     collector: dict = Field(default_factory=dict,
-                            description="ESP UDP 수신 상태: enabled, listening, port, received, rejected, "
+                            description="ESP UDP 수신 상태: enabled, listening, port, allowed_sources(비면 모두 허용), received, rejected, "
                                         "dropped_no_session(취침 모드가 꺼져 버린 패킷), last_packet_at")
     checks: dict[str, str] = Field(description="DB·Storage 연결 확인 결과 (ok | unavailable: 연결 불가 | error: 오류 응답)")
     version: str = Field(description="API 버전")

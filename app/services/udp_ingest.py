@@ -41,6 +41,10 @@ class UdpCollector(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr) -> None:
         now = self.clock()
+        allowed = self.settings.udp_allowed_sources
+        if allowed and (not addr or addr[0] not in allowed):
+            self.stats["rejected_source"] += 1
+            return
         for line in data.decode("utf-8", errors="ignore").splitlines():
             if not line.strip():
                 continue
@@ -69,6 +73,7 @@ class UdpCollector(asyncio.DatagramProtocol):
             "listening": self.listening,
             "port": self.settings.udp_port,
             "received": self.stats["received"],
+            "allowed_sources": list(self.settings.udp_allowed_sources),
             "rejected": sum(v for k, v in self.stats.items() if k.startswith("rejected_")),
             "dropped_no_session": self.stats["dropped_no_session"],
             "last_packet_at": None if self.last_packet_wall is None else round(self.last_packet_wall, 3),
@@ -79,16 +84,19 @@ class UdpCollector(asyncio.DatagramProtocol):
             if not self.buffer:
                 return
             batch, self.buffer = self.buffer, []
-        session_id = self._running_session()
-        if session_id is None:
-            self.stats["dropped_no_session"] += len(batch)
-            return
         try:
-            result = self.sessions.ingest(session_id, batch)
-            self.stats["accepted"] += result.accepted
-        except (SessionStopped, SessionNotFound):
+            for attempt in range(2):
+                session_id = self._running_session(force=attempt > 0)
+                if session_id is None:
+                    self.stats["dropped_no_session"] += len(batch)
+                    return
+                try:
+                    result = self.sessions.ingest(session_id, batch)
+                except (SessionStopped, SessionNotFound):
+                    continue
+                self.stats["accepted"] += result.accepted
+                return
             self._session_id = None
-            self._session_checked = 0.0
             self.stats["dropped_no_session"] += len(batch)
         except Exception:
             log.exception("could not hand %d UDP packets to session %s", len(batch), session_id)
@@ -98,9 +106,9 @@ class UdpCollector(asyncio.DatagramProtocol):
                     self.stats["dropped_overflow"] += len(self.buffer) - MAX_BUFFER
                     self.buffer = self.buffer[-MAX_BUFFER:]
 
-    def _running_session(self) -> str | None:
+    def _running_session(self, force: bool = False) -> str | None:
         now = self.clock()
-        if self._session_id is not None and now - self._session_checked < SESSION_REFRESH_SEC:
+        if not force and self._session_id is not None and now - self._session_checked < SESSION_REFRESH_SEC:
             return self._session_id
         try:
             running = self.sessions.list("running", limit=1)

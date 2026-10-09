@@ -67,6 +67,7 @@ class Settings:
     udp_host: str = "0.0.0.0"
     udp_port: int = 5005
     udp_flush_sec: float = 0.25
+    udp_allowed_sources: tuple[str, ...] = ()
     supabase_url: str | None = None
     supabase_key: str | None = None
     supabase_db_host: str | None = None
@@ -102,6 +103,7 @@ def load_settings() -> Settings:
         udp_enabled=_env("UDP_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on"),
         udp_host=_env("UDP_HOST", "0.0.0.0"),
         udp_port=int(_env("UDP_PORT", "5005")),
+        udp_allowed_sources=tuple(a.strip() for a in _env("UDP_ALLOWED_SOURCES", "").split(",") if a.strip()),
         supabase_url=_supabase_url(os.environ.get("SUPABASE_URL")),
         supabase_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or None,
         supabase_db_host=os.environ.get("SUPABASE_DB_HOST") or None,
