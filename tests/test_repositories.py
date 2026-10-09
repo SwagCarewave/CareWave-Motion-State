@@ -132,7 +132,15 @@ def test_network_failure_becomes_unavailable():
         repos.csv_files.list()
     assert exc.value.service == "database"
     assert len(calls) == 3
-    assert repos.ping() == {"database": exc.value.message, "storage": "storage 연결 실패 (ConnectError: down)"}
+    assert repos.ping() == {"database": "unavailable", "storage": "unavailable"}
+
+
+def test_ping_reports_error_responses_without_details():
+    def handler(request):
+        return httpx.Response(401, json={"message": "Invalid API key", "hint": "secret detail"})
+
+    repos = supabase_repositories("https://example.supabase.co", "k", "a", "b", transport=httpx.MockTransport(handler))
+    assert repos.ping() == {"database": "error", "storage": "error"}
 
 
 def test_retry_then_success():

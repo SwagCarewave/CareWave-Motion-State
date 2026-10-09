@@ -8,16 +8,9 @@ from urllib.parse import quote
 
 import httpx
 
-from .base import BackendUnavailable, ObjectNotFound, Repositories, split_filter
+from .base import BackendUnavailable, ObjectNotFound, Repositories, RepositoryError, split_filter
 
 RETRY_STATUS = {408, 425, 429, 500, 502, 503, 504}
-
-
-class RepositoryError(RuntimeError):
-    def __init__(self, status: int, body: str):
-        super().__init__(f"supabase request failed ({status}): {body[:300]}")
-        self.status = status
-        self.body = body
 
 
 class SupabaseHttp:

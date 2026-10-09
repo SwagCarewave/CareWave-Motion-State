@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 OPERATORS = ("eq", "gt", "gte", "lt", "lte", "in", "is")
+
+log = logging.getLogger("carewave.repositories")
 
 
 class BackendUnavailable(RuntimeError):
@@ -11,6 +14,13 @@ class BackendUnavailable(RuntimeError):
         super().__init__(message)
         self.service = service
         self.message = message
+
+
+class RepositoryError(RuntimeError):
+    def __init__(self, status: int, body: str):
+        super().__init__(f"repository request failed ({status}): {body[:300]}")
+        self.status = status
+        self.body = body
 
 
 class ObjectNotFound(KeyError):
@@ -78,6 +88,10 @@ class Repositories:
             try:
                 probe()
                 checks[name] = "ok"
-            except BackendUnavailable as exc:
-                checks[name] = exc.message
+            except BackendUnavailable:
+                log.exception("%s health check failed: unreachable", name)
+                checks[name] = "unavailable"
+            except Exception:
+                log.exception("%s health check failed: error response", name)
+                checks[name] = "error"
         return checks

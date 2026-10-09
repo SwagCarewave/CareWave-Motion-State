@@ -42,3 +42,20 @@ def test_startup_refuses_changed_model(settings):
         with TestClient(create_app(bad)):
             pass
 
+
+
+def test_health_degraded_when_backend_rejects(client):
+    import httpx
+
+    from app.repositories import supabase_repositories
+
+    def handler(request):
+        return httpx.Response(401, json={"message": "Invalid API key"})
+
+    client.app.state.repos = supabase_repositories("https://example.supabase.co", "k", "a", "b",
+                                                   transport=httpx.MockTransport(handler))
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    assert res.json()["status"] == "degraded"
+    assert res.json()["checks"] == {"database": "error", "storage": "error"}
+    assert "Invalid API key" not in res.text

@@ -37,7 +37,7 @@ class HealthOut(BaseModel):
     model: str = Field(description="사용 중인 모델 이름")
     model_verified: bool = Field(description="모델 파일 해시 검사 통과 여부")
     storage: str = Field(description="저장소 종류 (memory | supabase)")
-    checks: dict[str, str] = Field(description="DB·Storage 연결 확인 결과 (ok 또는 오류 내용)")
+    checks: dict[str, str] = Field(description="DB·Storage 연결 확인 결과 (ok | unavailable: 연결 불가 | error: 오류 응답)")
     version: str = Field(description="API 버전")
 
 

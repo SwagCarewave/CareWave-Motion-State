@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from app.config import Settings
 
-from .base import BackendUnavailable, ObjectNotFound, ObjectStore, Repositories, Table
+from .base import BackendUnavailable, ObjectNotFound, ObjectStore, Repositories, RepositoryError, Table
 from .memory import LocalObjectStore, MemoryTable, memory_repositories
-from .supabase import RepositoryError, supabase_repositories
+from .supabase import supabase_repositories
 
 __all__ = [
     "BackendUnavailable", "ObjectNotFound", "ObjectStore", "Repositories", "Table", "LocalObjectStore",
