@@ -2,61 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
+from helpers import FakeClock, csv_packets, send_packets, start_session
 
 from app.config import Settings, load_settings
-from app.main import create_app
 from app.repositories import memory_repositories, supabase_repositories
-from app.services.csv_reader import load_csi_csv
 from app.services.monitoring import SessionManager
 from motion_state.monitor_v2 import NightMonitorV2
-
-
-class FakeClock:
-    def __init__(self, now: float = 1_800_000_000.0):
-        self.now = now
-
-    def __call__(self) -> float:
-        return self.now
-
-
-@pytest.fixture
-def live_settings(tmp_path):
-    return Settings(storage_backend="memory", local_storage_dir=tmp_path / "storage", tick_sec=3600)
-
-
-@pytest.fixture
-def app_client(live_settings):
-    with TestClient(create_app(live_settings)) as c:
-        c.clock = FakeClock()
-        c.app.state.sessions.clock = c.clock
-        yield c
-
-
-def _packets(sample_csv, limit: int | None = None):
-    table = load_csi_csv(sample_csv)
-    out = []
-    for t, rx, amp in table.packets():
-        out.append({"ts": table.origin_ts + t, "rx": rx, "amplitude": amp.tolist()})
-    return out[:limit] if limit else out
-
-
-def _send(client, session_id, packets, size=300):
-    totals = {"accepted": 0, "rejected_invalid": 0, "rejected_incomplete": 0, "rejected_stale": 0, "frames": 0}
-    for i in range(0, len(packets), size):
-        batch = packets[i:i + size]
-        client.clock.now = batch[-1]["ts"]
-        res = client.post(f"/api/sessions/{session_id}/packets", json={"packets": batch})
-        assert res.status_code == 200, res.text
-        for k, v in res.json().items():
-            totals[k] += v
-    return totals
-
-
-def _start(client) -> str:
-    res = client.post("/api/sessions")
-    assert res.status_code in (200, 201)
-    return res.json()["id"]
 
 
 def test_start_is_idempotent(app_client):
@@ -73,9 +24,9 @@ def test_start_is_idempotent(app_client):
 
 
 def test_ingest_matches_original_monitor(app_client, sample_csv):
-    packets = _packets(sample_csv)
-    sid = _start(app_client)
-    totals = _send(app_client, sid, packets)
+    packets = csv_packets(sample_csv)
+    sid = start_session(app_client)
+    totals = send_packets(app_client, sid, packets)
     assert totals["accepted"] == len(packets)
 
     mon = NightMonitorV2(Settings().model_path)
@@ -97,11 +48,11 @@ def test_ingest_matches_original_monitor(app_client, sample_csv):
 
 
 def test_rejects_bad_duplicate_and_old_packets(app_client, sample_csv):
-    packets = _packets(sample_csv, 200)
-    sid = _start(app_client)
-    first = _send(app_client, sid, packets)
+    packets = csv_packets(sample_csv, 200)
+    sid = start_session(app_client)
+    first = send_packets(app_client, sid, packets)
     assert first["accepted"] == 200
-    again = _send(app_client, sid, packets)
+    again = send_packets(app_client, sid, packets)
     assert again["accepted"] == 0
     assert again["rejected_stale"] == 200
 
@@ -120,8 +71,8 @@ def test_rejects_bad_duplicate_and_old_packets(app_client, sample_csv):
 
 
 def test_signals_window_and_downsampling(app_client, sample_csv):
-    sid = _start(app_client)
-    _send(app_client, sid, _packets(sample_csv))
+    sid = start_session(app_client)
+    send_packets(app_client, sid, csv_packets(sample_csv))
     full = app_client.get(f"/api/sessions/{sid}/signals", params={"window": 60}).json()
     assert 115 <= full["count"] <= 121
     assert full["step_sec"] == 0.5
@@ -140,9 +91,9 @@ def test_signals_window_and_downsampling(app_client, sample_csv):
 
 
 def test_rx_lost_and_signal_check_when_packets_stop(app_client, sample_csv):
-    sid = _start(app_client)
-    packets = _packets(sample_csv, 1500)
-    _send(app_client, sid, packets)
+    sid = start_session(app_client)
+    packets = csv_packets(sample_csv, 1500)
+    send_packets(app_client, sid, packets)
     manager = app_client.app.state.sessions
     before = len(manager.live[sid].frames)
 
@@ -163,8 +114,8 @@ def test_rx_lost_and_signal_check_when_packets_stop(app_client, sample_csv):
 
 
 def test_stop_persists_and_reads_from_storage(app_client, sample_csv):
-    sid = _start(app_client)
-    _send(app_client, sid, _packets(sample_csv))
+    sid = start_session(app_client)
+    send_packets(app_client, sid, csv_packets(sample_csv))
     live_count = app_client.get(f"/api/sessions/{sid}/signals", params={"window": 3600}).json()["count"]
 
     stopped = app_client.post(f"/api/sessions/{sid}/stop")
@@ -187,7 +138,7 @@ def test_restart_resumes_running_session(live_settings, sample_csv):
     clock = FakeClock()
     first = SessionManager(live_settings, repos, "sha", clock)
     row, _ = first.start()
-    packets = _packets(sample_csv, 1500)
+    packets = csv_packets(sample_csv, 1500)
     first.ingest(row["id"], packets)
     clock.now = packets[-1]["ts"]
     first.tick()
@@ -196,20 +147,20 @@ def test_restart_resumes_running_session(live_settings, sample_csv):
     second = SessionManager(live_settings, repos, "sha", clock)
     assert second.status(row["id"])["status"] == "running"
     assert second.signals(row["id"], window_sec=3600)["count"] == saved
-    more = [{**p, "ts": p["ts"] + 200} for p in _packets(sample_csv, 400)]
+    more = [{**p, "ts": p["ts"] + 200} for p in csv_packets(sample_csv, 400)]
     clock.now = more[-1]["ts"]
     assert second.ingest(row["id"], more).accepted == 400
     assert second.start()[0]["id"] == row["id"]
 
 
 def test_websocket_streams_frames(app_client, sample_csv):
-    sid = _start(app_client)
-    packets = _packets(sample_csv, 600)
+    sid = start_session(app_client)
+    packets = csv_packets(sample_csv, 600)
     with app_client.websocket_connect(f"/ws/sessions/{sid}") as ws:
         snap = ws.receive_json()
         assert snap["type"] == "snapshot"
         assert snap["session"]["id"] == sid
-        _send(app_client, sid, packets)
+        send_packets(app_client, sid, packets)
         seen = []
         while sum(len(m.get("frames", [])) for m in seen) < 10:
             seen.append(ws.receive_json())
@@ -246,7 +197,7 @@ def test_supabase_session_roundtrip(tmp_path, sample_csv):
     row, created = manager.start()
     try:
         assert created
-        packets = _packets(sample_csv, 900)
+        packets = csv_packets(sample_csv, 900)
         clock.now = packets[-1]["ts"]
         assert manager.ingest(row["id"], packets).accepted == 900
         manager.tick()
@@ -300,7 +251,7 @@ def _manager(live_settings, repos=None):
 def test_restart_rejects_resent_packets_and_continues_event_numbers(live_settings, sample_csv):
     first, repos, clock = _manager(live_settings)
     row, _ = first.start()
-    packets = _packets(sample_csv)
+    packets = csv_packets(sample_csv)
     clock.now = packets[2999]["ts"]
     first.ingest(row["id"], packets[:3000])
     first.tick()
@@ -327,7 +278,7 @@ def test_restart_rejects_resent_packets_and_continues_event_numbers(live_setting
 def test_restart_shows_stored_receiver_state(live_settings, sample_csv):
     first, repos, clock = _manager(live_settings)
     row, _ = first.start()
-    packets = _packets(sample_csv, 900)
+    packets = csv_packets(sample_csv, 900)
     clock.now = packets[-1]["ts"]
     first.ingest(row["id"], packets)
     first.tick()
@@ -342,7 +293,7 @@ def test_restart_shows_stored_receiver_state(live_settings, sample_csv):
 def test_stop_keeps_events_and_final_state(live_settings, sample_csv):
     manager, repos, clock = _manager(live_settings)
     row, _ = manager.start()
-    packets = _packets(sample_csv)
+    packets = csv_packets(sample_csv)
     clock.now = packets[-1]["ts"]
     manager.ingest(row["id"], packets)
     live_events = manager.live[row["id"]].engine.events()
@@ -370,7 +321,7 @@ def test_flush_does_not_duplicate_frames_on_partial_failure(live_settings, sampl
     repos = replace(base, sessions=flaky_sessions, signal_frames=flaky_frames)
     manager, _, clock = _manager(live_settings, repos)
     row, _ = manager.start()
-    packets = _packets(sample_csv, 1500)
+    packets = csv_packets(sample_csv, 1500)
     clock.now = packets[-1]["ts"]
     manager.ingest(row["id"], packets)
 
@@ -390,9 +341,9 @@ def test_flush_does_not_duplicate_frames_on_partial_failure(live_settings, sampl
 def test_future_and_huge_gap_timestamps_are_safe(app_client, sample_csv):
     import time
 
-    sid = _start(app_client)
-    packets = _packets(sample_csv, 900)
-    _send(app_client, sid, packets)
+    sid = start_session(app_client)
+    packets = csv_packets(sample_csv, 900)
+    send_packets(app_client, sid, packets)
     last = packets[-1]["ts"]
 
     future = app_client.post(f"/api/sessions/{sid}/packets", json={"packets": [
@@ -407,3 +358,37 @@ def test_future_and_huge_gap_timestamps_are_safe(app_client, sample_csv):
     assert res["accepted"] == 300
     status = app_client.get(f"/api/sessions/{sid}").json()
     assert status["last_packet_at"] > last + 86000
+
+
+def test_iso_timestamps_keep_sub_millisecond_order(app_client, sample_csv):
+    from app.timeutil import parse_ts, to_iso
+
+    packets = [{**p, "ts": to_iso(p["ts"])} for p in csv_packets(sample_csv)]
+    last: dict[str, float] = {}
+    collide = 0
+    for p in packets:
+        rounded = round(parse_ts(p["ts"]), 3)
+        collide += p["rx"] in last and rounded <= last[p["rx"]]
+        last[p["rx"]] = rounded
+    assert collide > 0
+
+    sid = start_session(app_client)
+    accepted = stale = 0
+    for i in range(0, len(packets), 300):
+        batch = packets[i:i + 300]
+        app_client.clock.now = parse_ts(batch[-1]["ts"])
+        body = app_client.post(f"/api/sessions/{sid}/packets", json={"packets": batch}).json()
+        accepted += body["accepted"]
+        stale += body["rejected_stale"]
+    assert stale == 0
+    assert accepted == len(packets)
+
+    mon = NightMonitorV2(Settings().model_path)
+    ref = []
+    for p in packets:
+        ts = parse_ts(p["ts"])
+        mon.push_packet(ts, p["rx"], np.asarray(p["amplitude"]))
+        ref.extend(mon.poll(ts))
+    frames = list(app_client.app.state.sessions.live[sid].frames)
+    assert [(f.state, f.activity_score) for f in frames] == [(o.state, o.activity_score) for o in ref]
+    assert app_client.get(f"/api/sessions/{sid}").json()["event_count"] == len(mon.events) == 2

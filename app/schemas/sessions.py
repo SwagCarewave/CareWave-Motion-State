@@ -81,6 +81,7 @@ class SessionStartOut(SessionOut):
 
 class EventMarkerOut(BaseModel):
     id: int = Field(description="사건 번호")
+    uuid: str | None = Field(default=None, description="사건 ID (GET /api/events/{id} 의 id)")
     start_ts: float = Field(description="활동 시작 시각")
     alert_ts: float = Field(description="알림 시각")
     end_ts: float | None = Field(description="감지 종료 시각 (진행 중이면 null)")

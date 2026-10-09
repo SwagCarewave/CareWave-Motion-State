@@ -86,6 +86,7 @@ class LiveSession:
     saved_events: dict = field(default_factory=dict)
     alert_messages: dict = field(default_factory=dict)
     restored_rx: list = field(default_factory=list)
+    event_uuids: dict = field(default_factory=dict)
     saved_last_packet: float | None = None
 
     @property
@@ -121,8 +122,9 @@ def _row_frame(row: dict) -> dict:
     }
 
 
-def _event_row(session_id: str, e: dict, message: str | None) -> dict:
+def _event_row(session_id: str, event_uuid: str, e: dict, message: str | None) -> dict:
     return {
+        "id": event_uuid,
         "session_id": session_id,
         "analysis_id": None,
         "event_no": e["id"],
@@ -137,6 +139,7 @@ def _event_row(session_id: str, e: dict, message: str | None) -> dict:
 def _row_event(row: dict, guardian: str | None) -> dict:
     return {
         "id": row["event_no"],
+        "uuid": row["id"],
         "start_ts": from_iso(row["started_at"]),
         "alert_ts": from_iso(row["alerted_at"]),
         "end_ts": from_iso(row.get("ended_at")),
@@ -336,7 +339,45 @@ class SessionManager:
         events = self.events(session_id, live)
         out["event_count"] = len(events)
         out["unconfirmed_count"] = sum(1 for e in events if e["guardian_result"] is None)
+        if live is not None and out["state"] == "low_motion" and out["unconfirmed_count"]:
+            out.update(state="awaiting_confirmation", state_ko=STATE_KO["awaiting_confirmation"])
+        elif live is not None and out["state"] == "awaiting_confirmation" and not out["unconfirmed_count"]:
+            out.update(state="low_motion", state_ko=STATE_KO["low_motion"])
         return out
+
+    def live_event_state(self, session_id: str) -> dict[int, dict]:
+        live = self.live.get(session_id)
+        if live is None:
+            return {}
+        with live.lock:
+            return {e["id"]: e for e in self._live_events(live)}
+
+    def find_live_event(self, event_uuid: str) -> dict | None:
+        for live in list(self.live.values()):
+            with live.lock:
+                number = next((n for n, u in live.event_uuids.items() if u == event_uuid), None)
+                if number is None:
+                    continue
+                e = next((x for x in self._live_events(live) if x["id"] == number), None)
+                if e is None:
+                    continue
+                row = _event_row(live.id, event_uuid, e, live.alert_messages.get(number))
+                row["created_at"] = row["started_at"]
+                return row
+        return None
+
+    def close_live_event(self, session_id: str, number: int, result: str) -> None:
+        live = self.live.get(session_id)
+        if live is None:
+            return
+        with live.lock:
+            try:
+                live.engine.close_event(number, result)
+            except KeyError:
+                pass
+            if number in live.retired_events:
+                live.retired_events[number] = {**live.retired_events[number], "guardian_result": result}
+            self._publish(live, {"type": "event", "id": live.event_uuids.get(number), "number": number})
 
     def events(self, session_id: str, live: LiveSession | None = None) -> list[dict]:
         merged: dict[int, dict] = {}
@@ -355,8 +396,9 @@ class SessionManager:
             with live.lock:
                 for e in self._live_events(live):
                     stored = merged.get(e["id"])
+                    e = {**e, "uuid": live.event_uuids.get(e["id"])}
                     if stored is not None and e["guardian_result"] is None:
-                        e = {**e, "guardian_result": stored["guardian_result"]}
+                        e["guardian_result"] = stored["guardian_result"]
                     merged[e["id"]] = e
         return [merged[k] for k in sorted(merged)]
 
@@ -524,10 +566,19 @@ class SessionManager:
         if overflow > 0:
             del live.pending[:overflow]
         self._publish(live, {"type": "frames", "frames": [f.to_dict() for f in frames]})
-        for f in frames:
-            if f.alert:
-                live.alert_messages[f.event_id] = f.alert
-                self._publish(live, {"type": "alert", "ts": f.ts, "event_id": f.event_id, "message": f.alert})
+        alerts = [f for f in frames if f.alert]
+        if not alerts:
+            return
+        for f in alerts:
+            live.alert_messages[f.event_id] = f.alert
+            live.event_uuids.setdefault(f.event_id, str(uuid.uuid4()))
+        try:
+            self._persist_events(live)
+        except Exception:
+            log.exception("event save before alert failed for session %s", live.id)
+        for f in alerts:
+            self._publish(live, {"type": "alert", "ts": f.ts, "event_id": f.event_id,
+                                 "event_uuid": live.event_uuids[f.event_id], "message": f.alert})
 
     def _flush(self, live: LiveSession) -> None:
         if live.pending:
@@ -554,9 +605,11 @@ class SessionManager:
             key = _event_key(e)
             if live.saved_events.get(e["id"]) == key:
                 continue
-            self.repos.activity_events.upsert(_event_row(live.id, e, live.alert_messages.get(e["id"])),
+            event_uuid = live.event_uuids.setdefault(e["id"], str(uuid.uuid4()))
+            self.repos.activity_events.upsert(_event_row(live.id, event_uuid, e, live.alert_messages.get(e["id"])),
                                               ("session_id", "analysis_id", "event_no"))
             live.saved_events[e["id"]] = key
+            self._publish(live, {"type": "event", "id": event_uuid, "number": e["id"]})
 
     def _publish(self, live: LiveSession, message: dict[str, Any]) -> None:
         for sub in list(live.subscribers):
@@ -611,6 +664,7 @@ class SessionManager:
             stored = self.repos.activity_events.list({"session_id": live.id})
             live.saved_events = {r["event_no"]: _event_key(_row_event(r, None)) for r in stored}
             live.alert_messages = {r["event_no"]: r.get("alert_message") for r in stored}
+            live.event_uuids = {r["event_no"]: r["id"] for r in stored}
             live.restored_rx = self._stored_rx(live.id)
         except Exception:
             log.exception("could not restore events or receiver state for session %s", live.id)

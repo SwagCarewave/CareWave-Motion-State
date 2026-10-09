@@ -58,6 +58,8 @@ class CodesOut(BaseModel):
     rx_status: list[dict] = Field(description="RX 연결 상태 code·label·rule")
     state: list[dict] = Field(description="관찰 상태 code·label·rule")
     guardian_result: list[str] = Field(description="보호자 확인 결과로 보낼 수 있는 값")
+    event_status: list[dict] = Field(description="사건 확인 상태 code·label")
+    event_filter: list[dict] = Field(description="사건 목록 탭 code·label")
     signal_window: list[dict] = Field(description="그래프 기간 선택지 seconds·label")
     stream_message: list[dict] = Field(description="WebSocket 메시지 type·rule")
     error: list[dict] = Field(description="오류 code·http·meaning")

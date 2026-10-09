@@ -8,11 +8,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import sessions, system
+from app.api import events, sessions, system
 from app.config import Settings, get_settings
 from app.docs.openapi import COMMON_RESPONSES, SWAGGER_UI, TAGS, TITLE
 from app.errors import install_error_handlers
 from app.repositories import build_repositories
+from app.services.events import EventService
 from app.services.model_guard import verify_model
 from app.services.monitoring import SessionManager, run_ticker
 
@@ -29,6 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.model_info = verify_model(settings.model_path, settings.model_sha256)
         app.state.repos = build_repositories(settings)
         app.state.sessions = SessionManager(settings, app.state.repos, app.state.model_info.sha256)
+        app.state.events = EventService(app.state.repos, app.state.sessions)
         stop = asyncio.Event()
         ticker = asyncio.create_task(run_ticker(app.state.sessions, stop))
         try:
@@ -57,6 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(system.router)
     app.include_router(sessions.router)
     app.include_router(sessions.ws_router)
+    app.include_router(events.router)
     return app
 
 

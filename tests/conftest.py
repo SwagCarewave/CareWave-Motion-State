@@ -32,3 +32,24 @@ def client(settings):
 
     with TestClient(create_app(settings)) as c:
         yield c
+
+
+@pytest.fixture
+def live_settings(tmp_path):
+    from app.config import Settings
+
+    return Settings(storage_backend="memory", local_storage_dir=tmp_path / "storage", tick_sec=3600)
+
+
+@pytest.fixture
+def app_client(live_settings):
+    from fastapi.testclient import TestClient
+    from helpers import FakeClock
+
+    from app.main import create_app
+
+    with TestClient(create_app(live_settings)) as c:
+        c.clock = FakeClock()
+        c.app.state.sessions.clock = c.clock
+        c.app.state.events.clock = c.clock
+        yield c

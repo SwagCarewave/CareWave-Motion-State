@@ -64,7 +64,8 @@ def test_health_degraded_when_backend_rejects(client):
 def test_codes_match_engine_constants(client):
     from typing import get_args
 
-    from app.schemas.codes import GuardianResult, MonitorState, RxId, RxStatus
+    from app.schemas.codes import (EVENT_FILTER_KO, EVENT_STATUS_KO, STREAM_MESSAGE_RULE, EventFilter, EventStatus,
+                                   GuardianResult, MonitorState, RxId, RxStatus, StreamMessage)
     from app.services.engine import FINAL_GUARDIAN_RESULTS, RX_STATUS_KO
     from motion_state.csi_io import RX_IDS
     from motion_state.monitor_v2 import STATE_KO
@@ -73,6 +74,9 @@ def test_codes_match_engine_constants(client):
     assert get_args(RxStatus) == tuple(RX_STATUS_KO)
     assert get_args(RxId) == tuple(RX_IDS)
     assert get_args(GuardianResult) == FINAL_GUARDIAN_RESULTS
+    assert get_args(EventStatus) == tuple(EVENT_STATUS_KO)
+    assert get_args(EventFilter) == tuple(EVENT_FILTER_KO)
+    assert get_args(StreamMessage) == tuple(STREAM_MESSAGE_RULE)
 
     body = client.get("/api/codes").json()
     assert [s["code"] for s in body["state"]] == list(STATE_KO)
