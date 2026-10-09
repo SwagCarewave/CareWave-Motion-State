@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 outputs/
 docs/export/
+notes/
+.env
+.pytest_cache/
