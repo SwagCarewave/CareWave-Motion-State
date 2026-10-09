@@ -7,6 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+DEFAULT_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173")
+
 FINAL_MODEL_SHA256 = "89c3b1fab51e50f9817bfe5c9d07e213cd86fd97b3d95ab1ef330512a7bc9a0e"
 
 
@@ -55,6 +57,16 @@ class Settings:
     max_packets_per_request: int = 5000
     max_gap_sec: float = 600.0
     future_skew_sec: float = 3600.0
+    analysis_workers: int = 1
+    analysis_progress_step: float = 0.02
+    replay_tick_sec: float = 0.5
+    replay_idle_sec: float = 3600.0
+    results_cache_size: int = 4
+    event_burst_sec: float = 10.0
+    udp_enabled: bool = False
+    udp_host: str = "0.0.0.0"
+    udp_port: int = 5005
+    udp_flush_sec: float = 0.25
     supabase_url: str | None = None
     supabase_key: str | None = None
     supabase_db_host: str | None = None
@@ -75,7 +87,7 @@ class Settings:
 
 def load_settings() -> Settings:
     _load_dotenv(ROOT / ".env")
-    origins = tuple(o.strip() for o in _env("CORS_ORIGINS", "*").split(",") if o.strip())
+    origins = tuple(o.strip() for o in _env("CORS_ORIGINS", ",".join(DEFAULT_ORIGINS)).split(",") if o.strip())
     return Settings(
         model_path=Path(_env("MODEL_PATH", str(ROOT / "models" / "lying_walking_v2.pkl"))),
         model_sha256=_env("MODEL_SHA256", FINAL_MODEL_SHA256),
@@ -87,6 +99,9 @@ def load_settings() -> Settings:
         rx_weak_rate=float(_env("RX_WEAK_RATE", "3.0")),
         rx_rate_window_sec=float(_env("RX_RATE_WINDOW_SEC", "2.0")),
         rx_lost_sec=float(_env("RX_LOST_SEC", "5.0")),
+        udp_enabled=_env("UDP_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on"),
+        udp_host=_env("UDP_HOST", "0.0.0.0"),
+        udp_port=int(_env("UDP_PORT", "5005")),
         supabase_url=_supabase_url(os.environ.get("SUPABASE_URL")),
         supabase_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or None,
         supabase_db_host=os.environ.get("SUPABASE_DB_HOST") or None,
