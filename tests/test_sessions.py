@@ -256,6 +256,154 @@ def test_supabase_session_roundtrip(tmp_path, sample_csv):
         assert stored["count"] == len(repos.signal_frames.list({"session_id": row["id"]}))
         assert stored["count"] > 0
         assert repos.sessions.get(row["id"])["status"] == "stopped"
+        events = repos.activity_events.list({"session_id": row["id"]})
+        assert [e["event_no"] for e in events] == [1]
+        again = {k: events[0][k] for k in ("session_id", "analysis_id", "event_no", "started_at", "alerted_at",
+                                           "ended_at", "duration_sec", "alert_message")}
+        repos.activity_events.upsert(again, ("session_id", "analysis_id", "event_no"))
+        assert len(repos.activity_events.list({"session_id": row["id"]})) == 1
+        assert manager.status(row["id"])["event_count"] == 1
     finally:
         repos.sessions.delete(row["id"])
     assert repos.signal_frames.list({"session_id": row["id"]}) == []
+
+
+class FlakyTable:
+    def __init__(self, inner, fail_update: int = 0, fail_insert: int = 0):
+        self.inner = inner
+        self.fail_update = fail_update
+        self.fail_insert = fail_insert
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def update(self, *args, **kwargs):
+        if self.fail_update:
+            self.fail_update -= 1
+            raise RuntimeError("update failed")
+        return self.inner.update(*args, **kwargs)
+
+    def insert_many(self, rows):
+        result = self.inner.insert_many(rows)
+        if self.fail_insert:
+            self.fail_insert -= 1
+            raise RuntimeError("response lost after insert")
+        return result
+
+
+def _manager(live_settings, repos=None):
+    repos = repos or memory_repositories(live_settings.local_storage_dir)
+    clock = FakeClock()
+    return SessionManager(live_settings, repos, "sha", clock), repos, clock
+
+
+def test_restart_rejects_resent_packets_and_continues_event_numbers(live_settings, sample_csv):
+    first, repos, clock = _manager(live_settings)
+    row, _ = first.start()
+    packets = _packets(sample_csv)
+    clock.now = packets[2999]["ts"]
+    first.ingest(row["id"], packets[:3000])
+    first.tick()
+    stored_frames = len(repos.signal_frames.list({"session_id": row["id"]}))
+    stored_events = sorted(e["event_no"] for e in repos.activity_events.list({"session_id": row["id"]}))
+    assert stored_events == [e["id"] for e in first.live[row["id"]].engine.events()]
+    assert stored_events
+
+    second = SessionManager(live_settings, repos, "sha", clock)
+    resent = second.ingest(row["id"], packets[2000:3000])
+    assert resent.accepted == 0
+    assert resent.rejected_stale == 1000
+    second.tick()
+    assert len(repos.signal_frames.list({"session_id": row["id"]})) == stored_frames
+
+    clock.now = packets[-1]["ts"]
+    second.ingest(row["id"], packets[3000:])
+    second.stop(row["id"])
+    numbers = sorted(e["event_no"] for e in repos.activity_events.list({"session_id": row["id"]}))
+    assert numbers == sorted(set(numbers))
+    assert numbers[0] == 1
+
+
+def test_restart_shows_stored_receiver_state(live_settings, sample_csv):
+    first, repos, clock = _manager(live_settings)
+    row, _ = first.start()
+    packets = _packets(sample_csv, 900)
+    clock.now = packets[-1]["ts"]
+    first.ingest(row["id"], packets)
+    first.tick()
+
+    clock.now = packets[-1]["ts"] + 60
+    second = SessionManager(live_settings, repos, "sha", clock)
+    rx = second.status(row["id"])["rx"]
+    assert {r["status"] for r in rx} == {"lost"}
+    assert all(r["last_packet_ts"] is not None for r in rx)
+
+
+def test_stop_keeps_events_and_final_state(live_settings, sample_csv):
+    manager, repos, clock = _manager(live_settings)
+    row, _ = manager.start()
+    packets = _packets(sample_csv)
+    clock.now = packets[-1]["ts"]
+    manager.ingest(row["id"], packets)
+    live_events = manager.live[row["id"]].engine.events()
+    manager.stop(row["id"])
+
+    stored = repos.activity_events.list({"session_id": row["id"]}, order_by="event_no")
+    assert [r["event_no"] for r in stored] == [e["id"] for e in live_events] == [1, 2]
+    assert stored[0]["alert_message"].startswith("취침 모드 중 움직임이")
+
+    status = manager.status(row["id"])
+    assert status["status"] == "stopped"
+    assert status["event_count"] == 2
+    assert status["unconfirmed_count"] == 2
+    assert status["state"] is not None
+    assert {r["status"] for r in status["rx"]} == {"ok"}
+    signals = manager.signals(row["id"], window_sec=3600)
+    assert [e["id"] for e in signals["events"]] == [1, 2]
+
+
+def test_flush_does_not_duplicate_frames_on_partial_failure(live_settings, sample_csv):
+    base = memory_repositories(live_settings.local_storage_dir)
+    flaky_sessions = FlakyTable(base.sessions, fail_update=2)
+    flaky_frames = FlakyTable(base.signal_frames, fail_insert=1)
+    from dataclasses import replace
+    repos = replace(base, sessions=flaky_sessions, signal_frames=flaky_frames)
+    manager, _, clock = _manager(live_settings, repos)
+    row, _ = manager.start()
+    packets = _packets(sample_csv, 1500)
+    clock.now = packets[-1]["ts"]
+    manager.ingest(row["id"], packets)
+
+    manager.tick()
+    clock.now += 5
+    manager.tick()
+    clock.now += 5
+    manager.tick()
+    expected = len(manager.live[row["id"]].frames)
+    assert not manager.live[row["id"]].pending
+    rows = base.signal_frames.list({"session_id": row["id"]})
+    assert len(rows) == expected
+    assert len({r["ts"] for r in rows}) == expected
+    assert base.sessions.get(row["id"])["last_packet_at"] is not None
+
+
+def test_future_and_huge_gap_timestamps_are_safe(app_client, sample_csv):
+    import time
+
+    sid = _start(app_client)
+    packets = _packets(sample_csv, 900)
+    _send(app_client, sid, packets)
+    last = packets[-1]["ts"]
+
+    future = app_client.post(f"/api/sessions/{sid}/packets", json={"packets": [
+        {"ts": app_client.clock.now + 7200, "rx": "RX1", "amplitude": [5.0] * 52}]}).json()
+    assert future["rejected_invalid"] == 1
+
+    jump = [{**p, "ts": p["ts"] + 86400} for p in packets[:300]]
+    app_client.clock.now = jump[-1]["ts"]
+    started = time.monotonic()
+    res = app_client.post(f"/api/sessions/{sid}/packets", json={"packets": jump}).json()
+    assert time.monotonic() - started < 5
+    assert res["accepted"] == 300
+    status = app_client.get(f"/api/sessions/{sid}").json()
+    assert status["last_packet_at"] > last + 86000

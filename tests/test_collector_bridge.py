@@ -96,3 +96,13 @@ def test_stopped_session_starts_new_one():
     assert calls == ["/api/sessions/s1/packets", "/api/sessions", "/api/sessions/s2/packets"]
     assert b.session_id == "s2"
     assert not b.buffer
+
+
+def test_read_rows_survives_broken_values():
+    header = "timestamp,rx," + ",".join(f"sub_{i}" for i in range(52))
+    broken = "2026-10-06T22:00:00+09:00,RX1," + ",".join(["abc", "nan", "inf"] + ["1"] * 49)
+    good = "2026-10-06T22:00:01+09:00,RX2," + ",".join(["2"] * 52)
+    rows = list(bridge_mod.read_rows(io.StringIO(f"{header}\n{broken}\n{good}\n")))
+    assert rows[0]["amplitude"][:3] == [None, None, None]
+    assert rows[1]["amplitude"] == [2.0] * 52
+    json.dumps(rows, allow_nan=False)
