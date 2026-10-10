@@ -110,3 +110,29 @@ ESP32는 CSI raw 줄(`CSI_DATA,RX1,<mac>,<rssi>,...,[imag real imag real ...]`)�
 ```
 
 서브캐리어는 ESP32의 64개 중 빈 자리 12개(DC 1개, 가장자리 보호 대역 11개)를 위치로 빼서 항상 52개를 저장합니다.
+
+## 7. 배포 (AWS EC2 + Docker)
+
+서버는 UDP 수신과 실시간 세션을 메모리에서 처리하므로 **1대, 워커 1개**로 계속 켜 둡니다. `app`(FastAPI)과 `caddy`(HTTPS 인증서 자동 발급, WebSocket 포함 프록시) 두 컨테이너로 실행합니다.
+
+```
+# 로컬 확인 (https://localhost)
+docker compose up --build
+
+# 서버 (EC2, Ubuntu)
+git clone https://github.com/SwagCarewave/CareWave-Motion-State.git && cd CareWave-Motion-State
+cp .env.example .env    # STORAGE_BACKEND=supabase, CORS_ORIGINS=<프론트 주소>, CAREWAVE_DOMAIN=<API 도메인>, Supabase 값
+docker compose run --rm app python scripts/migrate.py --apply
+docker compose up -d --build
+```
+
+`main`에 push하면 `.github/workflows/deploy.yml`이 테스트를 돌리고, 통과하면 AWS SSM으로 EC2에서 `scripts/deploy.sh`를 실행합니다(최신 커밋으로 맞추고 다시 빌드한 뒤 `/api/health` 확인). GitHub Actions는 OIDC로 IAM 역할을 받아서 AWS 키를 저장하지 않고, SSH 포트도 열지 않습니다. 저장소 Variables에 `AWS_DEPLOY_ROLE_ARN`, `EC2_INSTANCE_ID`를 등록하기 전에는 배포 단계를 건너뜁니다. DB 마이그레이션은 자동으로 돌리지 않습니다.
+
+- EC2 보안 그룹: TCP 80·443 열기, UDP 5005는 ESP32가 있는 곳의 공인 IP만, SSH 22는 내 IP만.
+- `CAREWAVE_DOMAIN`의 DNS A 레코드를 EC2 탄력적 IP로 지정해야 인증서가 발급됩니다.
+- AWS에서는 ESP32 패킷이 공유기의 **공인 IP**로 들어오므로 `CAREWAVE_UDP_ALLOWED_SOURCES`에도 공인 IP를 적습니다.
+- 재시작하면 진행 중인 실시간 세션이 끊기므로 측정하지 않는 시간에 배포합니다.
+
+### Supabase 일시 정지 방지
+
+무료 플랜은 7일간 요청이 없으면 프로젝트가 멈춥니다. 서버가 켜져 있으면 5분마다 오래된 실시간 프레임을 지우는 요청을 보내므로 멈추지 않고, 서버가 꺼져 있을 때를 위해 `.github/workflows/supabase-keepalive.yml`이 이틀마다 Supabase에 조회 요청을 보냅니다. 저장소 Settings → Secrets and variables → Actions에 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`를 등록하고, Actions 탭에서 `Run workflow`로 한 번 실행해 확인합니다.
