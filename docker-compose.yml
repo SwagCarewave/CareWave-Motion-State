@@ -1,0 +1,37 @@
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      CAREWAVE_UDP_HOST: 0.0.0.0
+    ports:
+      - "${CAREWAVE_UDP_PORT:-5005}:${CAREWAVE_UDP_PORT:-5005}/udp"
+    restart: unless-stopped
+    logging: *logging
+
+  caddy:
+    image: caddy:2.10
+    environment:
+      DOMAIN: ${CAREWAVE_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  caddy_data:
+  caddy_config:
