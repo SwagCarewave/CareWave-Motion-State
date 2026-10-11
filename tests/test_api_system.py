@@ -81,3 +81,35 @@ def test_codes_match_engine_constants(client):
 
     schema = client.get("/openapi.json").json()["components"]["schemas"]
     assert schema["RxStatusOut"]["properties"]["status"]["enum"] == list(RX_STATUS_KO)
+
+
+def test_unhandled_error_keeps_error_shape_and_cors(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+
+    app = create_app(Settings(storage_backend="memory", local_storage_dir=tmp_path / "storage",
+                              cors_origins=("http://localhost:5173",)))
+
+    @app.get("/api/boom")
+    def boom():
+        raise RuntimeError("boom")
+
+    with TestClient(app, raise_server_exceptions=False) as c:
+        res = c.get("/api/boom", headers={"Origin": "http://localhost:5173"})
+    assert res.status_code == 500
+    assert res.json()["error"]["code"] == "internal_error"
+    assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("2026-10-11T07:00:57.5054+00:00", 1791702057.505),
+    ("2026-10-11T07:00:57.5+00:00", 1791702057.5),
+    ("2026-10-11T07:00:57.123456789Z", 1791702057.123),
+    ("2026-10-11T07:00:57+00:00", 1791702057.0),
+])
+def test_from_iso_accepts_any_fraction_length(value, expected):
+    from app.timeutil import from_iso
+
+    assert from_iso(value) == expected

@@ -112,6 +112,19 @@ def test_storage_failure_does_not_register_file(csv_client, sample_csv):
     assert [r["status"] for r in repos.csv_files.list()] == ["upload_failed"]
 
 
+def test_upload_failing_after_insert_does_not_register_file(csv_client, sample_csv):
+    files = csv_client.app.state.files
+
+    def broken_view(row, analysis):
+        raise RuntimeError("view failed")
+
+    files.view = broken_view
+    res = _upload(csv_client, sample_csv)
+    assert res.status_code == 500
+    assert res.json()["error"]["code"] == "internal_error"
+    assert files.repos.csv_files.list() == []
+
+
 def test_analysis_matches_engine_and_feeds_events(csv_client, sample_csv):
     file_id, analysis = _analyzed(csv_client, sample_csv)
     assert analysis["status"] == "succeeded"
