@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.repositories import BackendUnavailable, RepositoryError
 from app.services.csv_reader import CsvValidationError
 from app.services.events import EventNotFound
 from app.services.exceptions import ServiceError
 from app.services.monitoring import SessionNotFound, SessionStopped
+
+log = logging.getLogger("carewave.errors")
 
 
 class ApiError(Exception):
@@ -24,6 +29,33 @@ class ApiError(Exception):
 
 def _body(code: str, message: str, detail: dict | None = None) -> dict:
     return {"error": {"code": code, "message": message, "detail": detail or {}}}
+
+
+class UnhandledErrorMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def tracked(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracked)
+        except Exception:
+            log.exception("unhandled error on %s %s", scope.get("method"), scope.get("path"))
+            if started:
+                raise
+            response = JSONResponse(_body("internal_error", "서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요."),
+                                    status_code=500)
+            await response(scope, receive, send)
 
 
 def install_error_handlers(app: FastAPI) -> None:

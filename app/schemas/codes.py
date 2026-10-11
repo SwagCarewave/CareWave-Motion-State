@@ -93,6 +93,7 @@ ERROR_CODES = {
     "database_unavailable": (503, "DB 연결 실패"),
     "storage_unavailable": (503, "Storage 연결 실패"),
     "repository_error": (502, "저장소가 요청을 거부함"),
+    "internal_error": (500, "서버 내부 오류"),
 }
 
 SIGNAL_WINDOWS = {600: "최근 10분", 1800: "최근 30분", 3600: "최근 1시간"}

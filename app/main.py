@@ -11,7 +11,7 @@ from app import __version__
 from app.api import analyses, events, files, replays, sessions, system
 from app.config import Settings, get_settings
 from app.docs.openapi import COMMON_RESPONSES, SWAGGER_UI, TAGS, TITLE
-from app.errors import install_error_handlers
+from app.errors import UnhandledErrorMiddleware, install_error_handlers
 from app.repositories import build_repositories
 from app.services.analysis import AnalysisService
 from app.services.events import EventService
@@ -69,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         swagger_ui_parameters=SWAGGER_UI,
         lifespan=lifespan,
     )
+    app.add_middleware(UnhandledErrorMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),

@@ -18,6 +18,7 @@ TAGS = [
 
 COMMON_RESPONSES = {
     422: {"model": ErrorOut, "description": "요청 또는 파일 형식 오류"},
+    500: {"model": ErrorOut, "description": "서버 내부 오류"},
     503: {"model": ErrorOut, "description": "DB 또는 Storage 연결 실패"},
 }
 
