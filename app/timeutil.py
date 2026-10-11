@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
+
+FRACTION = re.compile(r"\.(\d+)")
 
 
 def to_iso(ts: float) -> str:
@@ -11,6 +14,7 @@ def _iso_seconds(value: str) -> float:
     text = value.strip()
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
+    text = FRACTION.sub(lambda m: "." + m.group(1)[:6].ljust(6, "0"), text, count=1)
     dt = datetime.fromisoformat(text)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
