@@ -96,11 +96,11 @@ class FileService:
             raise
         try:
             row = self.repos.csv_files.update(file_id, {"status": "uploaded"}) or row
+            return self.view(row, None)
         except Exception:
             log.exception("could not mark file %s uploaded", file_id)
             self._discard(row)
             raise
-        return self.view(row, None)
 
     def list(self) -> list[dict]:
         rows = self.repos.csv_files.list({"status": "uploaded"}, order_by="created_at", desc=True)
