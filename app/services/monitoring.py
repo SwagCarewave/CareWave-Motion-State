@@ -199,6 +199,7 @@ class SessionManager:
                     except Exception:
                         log.exception("final receiver state save failed for session %s", session_id)
                     self._accept_frames(live, live.engine.flush())
+                    live.engine.end_session()     # close an event still in progress
                     self._flush(live)
                     if live.last_packet_ts is not None:
                         changes["last_packet_at"] = to_iso(live.last_packet_ts)
@@ -512,6 +513,7 @@ class SessionManager:
 
     def _new_segment(self, live: LiveSession) -> list[Frame]:
         tail = live.engine.flush()
+        live.engine.end_session()         # the old segment is over: close its event
         for e in live.engine.events():
             live.retired_events[e["id"]] = {**e, "ongoing": False}
         known = [*live.retired_events, *live.saved_events]

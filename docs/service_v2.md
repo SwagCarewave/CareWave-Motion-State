@@ -54,3 +54,25 @@ See the conversation summary. Main points:
   - While any alerted event is unconfirmed, the screen shows "보호자 확인 대기" instead of "움직임 적음".
   - Walking-level activity more than 30 s after detection end creates a new event and a new alert.
 - **Service evaluation is unchanged:** rule A 3 s caught 11/11 walks after warm-up, with 1 false alert.
+
+## Update: one event per walk (2026-10-12)
+Requested by the dashboard team: an event used to stay open until the guardian confirmed it, its duration kept growing, and walking again within 30 s merged into the same event without a new alert.
+- **An event is one continuous walking-level run** (gaps of 1 s or less allowed).
+  - It is created, with an alert, once the run lasts 3 s.
+  - It ends as soon as the run ends: `ended_at` (last walking-level moment) is set and `duration` is frozen. The output step on which this happens carries the ended event in `event_ended`.
+  - Walking again later creates a new event and a new alert. The 30 s merge window (`event_merge_sec`) is removed.
+- **Guardian confirmation is per event:** `guardian_close(id, result)`. An event can be ended but still unconfirmed; while any event is unconfirmed and nobody is walking, the screen shows "보호자 확인 대기".
+- **`end_session()`** ends an event still in progress when observation stops, then returns the night summary. `run_monitor.py` calls it at the end. A server must call it when a session stops, otherwise the last event keeps `ended_at = null`.
+- **Event keys:** `id, start, alert_t, ended_at, duration, guardian` (`detection_end` was renamed to `ended_at`).
+- **Effect on the replay evaluation** (`outputs/service_eval_v3`, same decisions, rule A 3 s):
+
+| | Before (merge 30 s) | After (one event per walk) |
+|---|---|---|
+| Walks after warm-up detected | 11 / 11 | 11 / 11 |
+| All alerts | 52 | 113 |
+| False alerts while lying (18.0 min) | 1 | 2 (both hoyeon_lie_down_normal_01, tossing) |
+| Alerts while standing still | 0 | 1 |
+| Alerts during other activity (getting up, falls, ...) | 23 | 74 |
+| Tossing segments alerted | 1 / 25 | 2 / 25 |
+
+More alerts are expected: each separate walk now alerts. If this is too many, a minimum quiet time before a new event can be added.

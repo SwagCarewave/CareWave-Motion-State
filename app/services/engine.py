@@ -159,6 +159,10 @@ class MotionEngine:
     def summary(self) -> dict:
         return self.monitor.summary()
 
+    def end_session(self) -> dict:
+        """Ends an event still in progress (observation stopped or engine replaced)."""
+        return self.monitor.end_session()
+
     def to_ts(self, t: float) -> float:
         return round((self.origin_ts or 0.0) + t, 3)
 
@@ -186,7 +190,7 @@ class MotionEngine:
 
     def _event(self, e: dict) -> dict:
         base = self._decision_origin()
-        end = e["detection_end"]
+        end = e["ended_at"]
         return {
             "id": e["id"],
             "start_ts": self.to_ts(base + e["start"]),
@@ -239,6 +243,7 @@ def run_table(engine: MotionEngine, table, on_frames=None) -> list[Frame]:
             if on_frames is not None:
                 on_frames(batch, t)
     tail = engine.flush()
+    engine.end_session()          # the file is over: close an event still in progress
     frames.extend(tail)
     if tail and on_frames is not None:
         on_frames(tail, engine.last_t)

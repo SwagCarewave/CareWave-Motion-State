@@ -8,8 +8,13 @@ Raw CSI packets in; every decision step (0.5 s) one MonitorOutput out.
   * events and alerts (plan 5.3), night summary (plan 5.4)
 The model measures movement level, not posture: the internal label is "걷기 수준" vs
 "걷기 수준 아님" (research log only, plan 10.1). A person who stops walking and waves their
-arms is "걷기 수준 아님", not "lying". After an alert the event stays open until the guardian
-closes it (plan 6.3): a drop in activity only ends detection, it never declares a safe return.
+arms is "걷기 수준 아님", not "lying".
+
+Events: one event = one continuous walking-level run (gaps <= gap_sec allowed). It is created,
+with an alert, once the run is persistent, and it ends (ended_at set, duration frozen) as soon as
+the run ends. Walking again later creates a new event and a new alert. Ending an event never
+declares a safe return: every event keeps its own guardian confirmation (guardian_close), and the
+screen shows "보호자 확인 대기" while any event is unconfirmed (plan 6.3).
 """
 from __future__ import annotations
 
@@ -43,7 +48,6 @@ class ServiceConfig:
     ratio_window_sec: float = 8.0       # rule B
     ratio_min: float = 0.7
     end_ratio: float = 0.75             # end threshold = end_ratio * model threshold (hysteresis)
-    event_merge_sec: float = 30.0       # activity resuming within this time continues the event
     calibration_sec: float = 20.0       # motion-index baseline from the first quiet seconds
     min_packet_rate: float = 3.0        # per RX, packets/s over signal_window_sec
     signal_window_sec: float = 2.0
@@ -62,6 +66,7 @@ class MonitorOutput:
     candidate_sec: float        # current candidate duration
     event: dict | None
     alert: str | None           # set only on the step an alert fires
+    event_ended: dict | None    # set only on the step an event ends (ended_at, final duration)
     signal: dict
 
     def to_dict(self) -> dict:
@@ -118,15 +123,18 @@ class NightMonitorV2:
         cfg, step = self.cfg, 0.5
         thresholds = {"activity_start": round(self.start_thr, 4), "activity_end": round(self.end_thr, 4)}
 
+        ended = None
+
         def out(state, internal, mi=None, alert=None):
             self.seconds["signal_check" if state == "signal_check" else internal] += step
             return MonitorOutput(round(d.t, 2), state, STATE_KO[state], internal, INTERNAL_KO[internal],
                                  None if mi is None else round(mi, 4), d.probability, thresholds,
                                  round(self._candidate(), 2), None if self.event is None else dict(self.event),
-                                 alert, signal)
+                                 alert, ended, signal)
 
         if not signal["ok"]:
             self._set_active(d.t, False)
+            ended = self._update_event()
             return out("signal_check", "unknown")
         if d.state == "warming_up" or d.probability is None:
             return out("baseline_prep", "unknown")
@@ -143,42 +151,56 @@ class NightMonitorV2:
         self._set_active(d.t, self.active)
 
         alert = None
-        cur = self.event          # event that new activity would merge into
-        if cur is not None and cur["detection_end"] is not None and d.t - cur["detection_end"] > cfg.event_merge_sec:
-            cur = self.event = None   # merge window over: new activity becomes a new event
-        if self.active and self._persistent(d.t):
-            if cur is None:
-                self.event = {"id": next(self.ids), "start": round(self.run_start, 2), "alert_t": round(d.t, 2),
-                              "detection_end": None, "duration": 0.0, "guardian": None}
-                self.events.append(self.event)
-                alert = (f"취침 모드 중 움직임이 약 {max(1, round(d.t - self.run_start))}초간 이어지고 있습니다. "
-                         f"현장을 확인해 주세요")
-            state = "sustained_activity"
-        elif cur is not None and self.active:
-            state = "sustained_activity"           # same event continues (no duplicate alert)
+        ended = self._update_event()          # ends the current event if its run has ended
+        if self.active and self.event is None and self._persistent(d.t):
+            self.event = {"id": next(self.ids), "start": round(self.run_start, 2), "alert_t": round(d.t, 2),
+                          "ended_at": None, "duration": round(self._candidate(), 2), "guardian": None}
+            self.events.append(self.event)
+            alert = (f"취침 모드 중 움직임이 약 {max(1, round(self._candidate()))}초간 이어지고 있습니다. "
+                     f"현장을 확인해 주세요")
+        if self.event is not None:
+            state = "sustained_activity"           # event in progress (short gaps <= gap_sec included)
         elif self.active or self.run_start is not None:
             state = "observing"
         else:
             state = "low_motion"
-        if self.event is not None:
-            ev = self.event
-            if self.active:
-                ev["detection_end"] = None
-            elif ev["detection_end"] is None:
-                ev["detection_end"] = round(d.t, 2)      # detection ended, situation NOT closed
-            ev["duration"] = round((ev["detection_end"] or d.t) - ev["start"], 2)
-        # an alerted event the guardian has not closed keeps the screen out of "움직임 적음"
+        # an alerted event the guardian has not confirmed keeps the screen out of "움직임 적음"
         if state == "low_motion" and self.open_events():
             state = "awaiting_confirmation"
         if self.baseline is None:
             state = "baseline_prep" if state == "low_motion" else state
         return out(state, internal, mi, alert)
 
+    def _update_event(self) -> dict | None:
+        """Keep the current event's duration live; end it once its run ends and return it then."""
+        ev = self.event
+        if ev is None:
+            return None
+        if self.run_start is not None:
+            ev["duration"] = round(self.last_active - ev["start"], 2)
+            return None
+        return self._end_event()                 # inactive for longer than gap_sec: the walk is over
+
+    def _end_event(self) -> dict:
+        ev = self.event
+        ev["ended_at"] = round(self.last_active, 2)
+        ev["duration"] = round(self.last_active - ev["start"], 2)
+        self.event = None
+        return dict(ev)
+
+    def end_session(self) -> dict:
+        """Call when observation stops: ends an event still in progress, then returns the summary."""
+        if self.event is not None:
+            self._end_event()
+        self.run_start = None
+        return self.summary()
+
     def open_events(self) -> list[dict]:
+        """Events (in progress or ended) the guardian has not confirmed yet."""
         return [e for e in self.events if e["guardian"] is None]
 
     def guardian_close(self, event_id: int, result: str) -> None:
-        """Guardian's 'situation closed' input (plan 5.3). Kept separate from detection end."""
+        """Guardian's confirmation of one event (plan 5.3). Independent of the event's ended_at."""
         if result not in GUARDIAN_RESULTS:
             raise ValueError(f"result must be one of {GUARDIAN_RESULTS}")
         for e in self.events:

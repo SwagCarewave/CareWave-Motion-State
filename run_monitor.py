@@ -92,7 +92,7 @@ def main() -> None:
         args.save_baseline.write_text(json.dumps(base, indent=1), encoding="utf-8")
         print(json.dumps(base, ensure_ascii=False))
         return
-    print(json.dumps({"night_summary": mon.summary()}, ensure_ascii=False))
+    print(json.dumps({"night_summary": mon.end_session()}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

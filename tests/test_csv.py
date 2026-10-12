@@ -379,7 +379,7 @@ def test_event_labels_follow_duration(tmp_path, sample_csv):
     with TestClient(create_app(settings)) as c:
         _, analysis = _analyzed(c, sample_csv)
         markers = c.get(f"/api/analyses/{analysis['id']}/signals").json()["events"]
-        assert [(m["duration_sec"], m["label"]) for m in markers] == [(16.5, "짧은 움직임"), (21.5, "움직임 급증")]
+        assert [(m["duration_sec"], m["label"]) for m in markers] == [(16.0, "짧은 움직임"), (21.0, "움직임 급증")]
         items = c.get("/api/events", params={"analysis_id": analysis["id"]}).json()["items"]
         assert [e["label"] for e in items] == ["짧은 움직임", "움직임 급증"]
 
