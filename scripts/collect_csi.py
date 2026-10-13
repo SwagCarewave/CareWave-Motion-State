@@ -20,7 +20,18 @@ KST = timezone(timedelta(hours=9))
 HEADER = ["experiment_id", "timestamp", "label", "rx", *SUB_COLS]
 
 
-def udp_lines(host: str, port: int, stop_at: float | None) -> Iterator[str]:
+def parse_forward(value: str) -> tuple[str, int]:
+    host, _, port = value.rpartition(":")
+    if not host:
+        host, port = port, "5005"
+    try:
+        return socket.gethostbyname(host), int(port)
+    except (OSError, ValueError):
+        raise argparse.ArgumentTypeError(f"전달 주소를 해석할 수 없습니다: {value} (예: 1.2.3.4:5005)")
+
+
+def udp_lines(host: str, port: int, stop_at: float | None,
+              forward: tuple[str, int] | None = None) -> Iterator[str]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.bind((host, port))
@@ -35,6 +46,13 @@ def udp_lines(host: str, port: int, stop_at: float | None) -> Iterator[str]:
             except socket.timeout:
                 yield ""
                 continue
+            except ConnectionResetError:
+                continue
+            if forward is not None:
+                try:
+                    sock.sendto(data, forward)
+                except OSError as exc:
+                    print(f"전달 실패 {forward[0]}:{forward[1]}: {exc}", file=sys.stderr, flush=True)
             yield from data.decode("utf-8", errors="ignore").splitlines()
     finally:
         sock.close()
@@ -111,13 +129,19 @@ def main() -> None:
     ap.add_argument("--label", default="unlabeled", help="CSV label 열 값 (예: lie_down, walk)")
     ap.add_argument("--out", type=Path, help="저장 경로 (기본: outputs/collected/csi_raw_<label>_<시각>.csv)")
     ap.add_argument("--duration", type=float, help="이 시간(초)이 지나면 자동 종료")
+    ap.add_argument("--forward", type=parse_forward, metavar="HOST[:PORT]",
+                    help="받은 UDP 패킷을 저장하면서 그대로 이 주소로도 보냄 (예: 서버IP:5005)")
     args = ap.parse_args()
+    if args.forward and args.stdin:
+        ap.error("--forward 는 UDP로 받을 때만 쓸 수 있습니다")
 
     out = args.out or default_out(args.label)
     experiment_id = datetime.now(KST).strftime("%Y%m%d_%H%M%S")
     stop_at = None if args.duration is None else time.monotonic() + args.duration
-    lines = stdin_lines(stop_at) if args.stdin else udp_lines(args.host, args.port, stop_at)
+    lines = stdin_lines(stop_at) if args.stdin else udp_lines(args.host, args.port, stop_at, args.forward)
     source = "표준입력" if args.stdin else f"udp://{args.host}:{args.port}"
+    if args.forward:
+        source += f" (전달 → {args.forward[0]}:{args.forward[1]})"
     print(f"수집 시작: {source} → {out} (label={args.label}, experiment_id={experiment_id})", flush=True)
     stats = collect(lines, out, args.label, experiment_id)
     print(f"수집 종료: {_summary(stats)} → {out}", flush=True)
