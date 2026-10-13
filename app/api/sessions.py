@@ -8,7 +8,7 @@ from app.api.streaming import pump
 from app.docs import sessions as docs
 from app.docs.openapi import TAG_LIVE
 from app.schemas.codes import SessionStatus
-from app.schemas.sessions import IngestOut, PacketBatchIn, SessionOut, SessionStartOut, SignalsOut
+from app.schemas.sessions import IngestOut, PacketBatchIn, RecordingOut, SessionOut, SessionStartOut, SignalsOut
 from app.services.monitoring import SessionManager, SessionNotFound, SessionStopped
 
 router = APIRouter(prefix="/api/sessions", tags=[TAG_LIVE])
@@ -64,6 +64,22 @@ def get_signals(request: Request, session_id: str,
     data = _manager(request).signals(session_id, window_sec=window, from_ts=from_ts, to_ts=to_ts,
                                      max_points=max_points, heatmap=heatmap)
     return SignalsOut(**data)
+
+
+@router.get("/{session_id}/recording", response_model=RecordingOut, **docs.RECORDING)
+def get_recording(request: Request, session_id: str) -> RecordingOut:
+    manager = _manager(request)
+    manager.row(session_id)
+    return RecordingOut(**manager.recorder.status(session_id))
+
+
+@router.get("/{session_id}/recording/csv", response_class=Response, **docs.RECORDING_CSV)
+def download_recording(request: Request, session_id: str) -> Response:
+    manager = _manager(request)
+    manager.row(session_id)
+    filename, data = manager.recorder.download(session_id)
+    return Response(content=data, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @ws_router.websocket("/ws/sessions/{session_id}")

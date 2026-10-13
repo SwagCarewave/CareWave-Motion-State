@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.codes import (EVENT_LABEL_DOC, GUARDIAN_DOC, RX_ID_DOC, RX_STATUS_DOC, SESSION_STATUS_DOC,
-                               STATE_DOC, MonitorState, RxId, RxStatus, SessionStatus)
+from app.schemas.codes import (EVENT_LABEL_DOC, GUARDIAN_DOC, RECORDING_STATUS_DOC, RX_ID_DOC, RX_STATUS_DOC,
+                               SESSION_STATUS_DOC, STATE_DOC, MonitorState, RecordingStatus, RxId, RxStatus,
+                               SessionStatus)
 
 
 class PacketIn(BaseModel):
@@ -77,6 +78,34 @@ class SessionOut(BaseModel):
 
 class SessionStartOut(SessionOut):
     created: bool = Field(description="새로 시작했으면 true, 이미 실행 중인 세션을 돌려줬으면 false")
+
+
+class RecordingOut(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {
+        "session_id": "4b8f3c9e-2d6a-4f0e-9a51-6f1d2c3b4a5e",
+        "status": "ready",
+        "downloadable": True,
+        "packets": 4024,
+        "duration_sec": 119.85,
+        "size_bytes": 2122909,
+        "started_at": 1791370800.0,
+        "ended_at": 1791370919.85,
+        "expires_at": 1791371225.0,
+        "max_duration_sec": 900.0,
+        "keep_sec": 300.0,
+    }})
+
+    session_id: str = Field(description="세션 ID")
+    status: RecordingStatus = Field(description=f"녹화 상태. {RECORDING_STATUS_DOC}")
+    downloadable: bool = Field(description="CSV 버튼 활성화 여부 (status가 ready일 때만 true)")
+    packets: int = Field(description="녹화한 CSI 패킷 수")
+    duration_sec: float = Field(description="첫 패킷부터 마지막 패킷까지 길이(초)")
+    size_bytes: int | None = Field(description="CSV 파일 크기 (ready일 때만)")
+    started_at: float | None = Field(description="첫 패킷 시각")
+    ended_at: float | None = Field(description="마지막 패킷 시각")
+    expires_at: float | None = Field(description="이 시각이 지나면 파일을 지움 (ready일 때만)")
+    max_duration_sec: float = Field(description="녹화 최대 길이(초). 넘으면 too_long")
+    keep_sec: float = Field(description="종료 후 보관 시간(초)")
 
 
 class EventMarkerOut(BaseModel):

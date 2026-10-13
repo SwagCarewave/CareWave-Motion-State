@@ -68,6 +68,9 @@ class Settings:
     udp_port: int = 5005
     udp_flush_sec: float = 0.25
     udp_allowed_sources: tuple[str, ...] = ()
+    recording_dir: Path | None = None
+    recording_max_sec: float = 900.0
+    recording_keep_sec: float = 300.0
     supabase_url: str | None = None
     supabase_key: str | None = None
     supabase_db_host: str | None = None
@@ -78,6 +81,10 @@ class Settings:
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
+
+    @property
+    def recordings_path(self) -> Path:
+        return self.recording_dir or self.local_storage_dir.parent / "recordings"
 
     @property
     def supabase_ref(self) -> str | None:
@@ -104,6 +111,9 @@ def load_settings() -> Settings:
         udp_host=_env("UDP_HOST", "0.0.0.0"),
         udp_port=int(_env("UDP_PORT", "5005")),
         udp_allowed_sources=tuple(a.strip() for a in _env("UDP_ALLOWED_SOURCES", "").split(",") if a.strip()),
+        recording_dir=Path(_env("RECORDING_DIR", "")) if _env("RECORDING_DIR", "") else None,
+        recording_max_sec=float(_env("RECORDING_MAX_SEC", "900")),
+        recording_keep_sec=float(_env("RECORDING_KEEP_SEC", "300")),
         supabase_url=_supabase_url(os.environ.get("SUPABASE_URL")),
         supabase_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or None,
         supabase_db_host=os.environ.get("SUPABASE_DB_HOST") or None,

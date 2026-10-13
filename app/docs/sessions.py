@@ -48,6 +48,25 @@ SIGNALS = {
     "responses": _NOT_FOUND,
 }
 
+RECORDING = {
+    "summary": "실시간 녹화 상태",
+    "description": "취침 모드를 시작하면 받은 CSI 원본(raw)을 서버 디스크에 CSV로 녹화합니다. "
+                   "새 세션을 시작하면 이전 녹화는 바로 지웁니다. 종료 후 보관 시간(기본 5분)이 지나면 지웁니다. "
+                   "첫 패킷부터 최대 길이(기본 15분)를 넘으면 녹화를 버립니다. downloadable이 true일 때 CSV 버튼을 켭니다.",
+    "responses": _NOT_FOUND,
+}
+
+RECORDING_CSV = {
+    "summary": "실시간 녹화 CSV 받기",
+    "description": "녹화한 CSI 원본을 CSV 파일로 내려받습니다. 형식은 수집기(collect_csi.py)와 같아서 "
+                   "POST /api/files 로 그대로 올리면 분석·그래프가 됩니다. 녹화 상태가 ready일 때만 받을 수 있습니다.",
+    "responses": {
+        200: {"content": {"text/csv": {}}, "description": "CSV 파일 (Content-Disposition: attachment)"},
+        **_NOT_FOUND,
+        409: {"model": ErrorOut, "description": "받을 수 있는 녹화 없음 (recording_unavailable, detail.status)"},
+    },
+}
+
 STATUS_PARAM = f"세션 상태로 거르기. {SESSION_STATUS_DOC}. 비우면 전체"
 LIMIT_PARAM = "최대 개수 (1~100)"
 WINDOW_PARAM = f"최근 N초 (10~3600). 화면 선택지: {WINDOW_DOC}. from을 주면 무시"

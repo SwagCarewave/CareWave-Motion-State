@@ -15,6 +15,7 @@ import numpy as np
 from app.config import Settings
 from app.repositories import Repositories, RepositoryError
 from app.services.engine import RX_STATUS_KO, Frame, MotionEngine, build_engine
+from app.services.recording import RecordingService
 from app.services.series import build_series
 from app.timeutil import from_iso, parse_ts, to_iso
 from motion_state.csi_io import N_SUB, RX_IDS
@@ -166,6 +167,7 @@ class SessionManager:
         self.lock = threading.RLock()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.last_purge_wall = 0.0
+        self.recorder = RecordingService(settings, lambda: self.clock())
 
     @property
     def buffer_size(self) -> int:
@@ -182,6 +184,7 @@ class SessionManager:
                 "model_sha256": self.model_sha256,
             })
             self._ensure_live(row, resume=False)
+            self.recorder.begin(row["id"])
             return row, True
 
     def stop(self, session_id: str) -> dict:
@@ -189,6 +192,7 @@ class SessionManager:
             row = self._row(session_id)
             if row["status"] == "stopped":
                 self.live.pop(session_id, None)
+                self.recorder.finish(session_id)
                 return row
             live = self.live.get(session_id)
             changes = {"status": "stopped", "stopped_at": to_iso(self.clock())}
@@ -203,6 +207,7 @@ class SessionManager:
                     self._flush(live)
                     if live.last_packet_ts is not None:
                         changes["last_packet_at"] = to_iso(live.last_packet_ts)
+            self.recorder.finish(session_id)
             updated = self.repos.sessions.update(session_id, changes) or row
             if live is not None:
                 self.live.pop(session_id, None)
@@ -253,6 +258,7 @@ class SessionManager:
             prepared.append((ts, rx, amp))
         prepared.sort(key=lambda x: x[0])
         new_frames: list[Frame] = []
+        recorded: list[tuple[float, str, np.ndarray]] = []
         with live.lock:
             for ts, rx, amp in prepared:
                 last = live.last_rx_ts.get(rx)
@@ -268,6 +274,7 @@ class SessionManager:
                 live.same_ts_seen[rx].add(digest)
                 live.last_rx_ts[rx] = ts
                 live.engine.push(ts, rx, amp)
+                recorded.append((ts, rx, amp))
                 new_frames.extend(live.engine.poll(ts))
                 result.accepted += 1
                 live.last_packet_ts = ts if live.last_packet_ts is None else max(live.last_packet_ts, ts)
@@ -275,6 +282,7 @@ class SessionManager:
                 live.last_receive_wall = wall
                 live.clock_offset = wall - live.last_packet_ts
                 live.polled_until = None
+            self.recorder.write(live.id, recorded)
             self._accept_frames(live, new_frames)
         result.frames = len(new_frames)
         return result
@@ -431,6 +439,10 @@ class SessionManager:
                 self._tick_session(live, wall)
             except Exception:
                 log.exception("tick failed for session %s", live.id)
+        try:
+            self.recorder.purge()
+        except Exception:
+            log.exception("recording purge failed")
         if wall - self.last_purge_wall >= self.settings.purge_interval_sec:
             self.last_purge_wall = wall
             try:

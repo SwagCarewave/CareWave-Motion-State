@@ -7,6 +7,7 @@ from motion_state.csi_io import RX_IDS
 from motion_state.monitor_v2 import STATE_KO
 
 SessionStatus = Literal["running", "stopped"]
+RecordingStatus = Literal["none", "recording", "ready", "too_long", "empty", "expired", "failed"]
 RxId = Literal["RX1", "RX2", "RX3"]
 RxStatus = Literal["ok", "weak", "lost", "none"]
 MonitorState = Literal["baseline_prep", "low_motion", "observing", "sustained_activity", "signal_check",
@@ -48,6 +49,26 @@ EVENT_FILTER_KO = {"all": "전체", "unconfirmed": "미확인", "confirmed": "�
 
 SESSION_STATUS_KO = {"running": "관찰 중", "stopped": "종료"}
 
+RECORDING_STATUS_KO = {
+    "none": "녹화 없음",
+    "recording": "녹화 중",
+    "ready": "CSV 받기 가능",
+    "too_long": "최대 길이 초과",
+    "empty": "받은 패킷 없음",
+    "expired": "보관 시간 지나 삭제됨",
+    "failed": "저장 실패",
+}
+
+RECORDING_STATUS_RULE = {
+    "none": "이 세션을 시작할 때 녹화가 시작되지 않았음 (서버 재시작 후 이어진 세션, 다른 세션이 새로 시작됨)",
+    "recording": "취침 모드가 켜져 있음. 종료하면 ready",
+    "ready": "종료 후 보관 시간(기본 5분) 안. CSV 버튼 활성화",
+    "too_long": "첫 패킷부터 최대 길이(기본 15분)를 넘어 녹화를 버림",
+    "empty": "종료했지만 받은 CSI 패킷이 없음",
+    "expired": "종료 후 보관 시간이 지나 파일을 지움",
+    "failed": "서버 디스크에 쓰지 못함",
+}
+
 RX_STATUS_RULE = {
     "ok": "최근 2초 동안 초당 패킷 3개 이상",
     "weak": "최근 2초 동안 초당 패킷 3개 미만",
@@ -80,6 +101,7 @@ ERROR_CODES = {
     "no_valid_rows": (422, "CSV에 유효한 행이 없음"),
     "session_not_found": (404, "관찰 세션 없음"),
     "session_stopped": (409, "이미 종료된 세션"),
+    "recording_unavailable": (409, "받을 수 있는 녹화 CSV 없음 (detail.status 참고)"),
     "event_not_found": (404, "활동 사건 없음"),
     "unsupported_file": (422, "CSV 파일이 아님 (확장자 .csv)"),
     "empty_file": (422, "빈 파일"),
@@ -108,6 +130,7 @@ def describe(labels: dict, rules: dict | None = None) -> str:
 
 
 SESSION_STATUS_DOC = describe(SESSION_STATUS_KO)
+RECORDING_STATUS_DOC = describe(RECORDING_STATUS_KO, RECORDING_STATUS_RULE)
 RX_ID_DOC = " / ".join(f"`{rx}`" for rx in RX_IDS)
 RX_STATUS_DOC = describe(RX_STATUS_KO, RX_STATUS_RULE)
 STATE_DOC = describe(STATE_KO, STATE_RULE)
@@ -125,6 +148,8 @@ EVENT_FILTER_DOC = describe(EVENT_FILTER_KO)
 def catalog() -> dict:
     return {
         "session_status": [{"code": k, "label": v} for k, v in SESSION_STATUS_KO.items()],
+        "recording_status": [{"code": k, "label": v, "rule": RECORDING_STATUS_RULE[k]}
+                             for k, v in RECORDING_STATUS_KO.items()],
         "rx": list(RX_IDS),
         "rx_status": [{"code": k, "label": v, "rule": RX_STATUS_RULE[k]} for k, v in RX_STATUS_KO.items()],
         "state": [{"code": k, "label": v, "rule": STATE_RULE[k]} for k, v in STATE_KO.items()],
