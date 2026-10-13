@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from motion_state.csi_io import N_SUB, RX_IDS
+from motion_state.maze import direction
 from motion_state.monitor_v2 import MonitorOutput, NightMonitorV2, ServiceConfig
 
 RX_STATUS_KO = {"ok": "정상", "weak": "신호 부족", "lost": "연결 끊김", "none": "미연결"}
@@ -35,6 +36,8 @@ class Frame:
     signal_ok: bool
     packet_rate: dict
     heatmap: list[float] | None
+    direction: str | None = None      # maze game: up/right/down/left from activity_score
+    direction_ko: str | None = None   # 상/우/하/좌
 
     def to_dict(self) -> dict:
         return {
@@ -50,6 +53,8 @@ class Frame:
             "signal_ok": self.signal_ok,
             "packet_rate": self.packet_rate,
             "heatmap": self.heatmap,
+            "direction": self.direction,
+            "direction_ko": self.direction_ko,
         }
 
 
@@ -173,6 +178,7 @@ class MotionEngine:
     def _frame(self, o: MonitorOutput) -> Frame:
         rel = self._decision_origin() + o.t
         self.frames += 1
+        move = direction(o.activity_score) if o.signal["ok"] else None   # no direction on a signal problem
         return Frame(
             ts=self.to_ts(rel),
             t=round(rel, 3),
@@ -186,6 +192,8 @@ class MotionEngine:
             signal_ok=bool(o.signal["ok"]),
             packet_rate=dict(o.signal["packet_rate"]),
             heatmap=self._take_heat(rel),
+            direction=None if move is None else move[0],
+            direction_ko=None if move is None else move[1],
         )
 
     def _event(self, e: dict) -> dict:
