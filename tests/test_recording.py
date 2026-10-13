@@ -112,8 +112,8 @@ def test_new_session_deletes_previous_recording(rec_client, sample_csv):
 
     second = start_session(rec_client)
     assert not old_path.exists()
-    assert rec_client.get(f"/api/sessions/{first}/recording").json()["status"] == "none"
-    assert rec_client.get(f"/api/sessions/{first}/recording/csv").status_code == 409
+    assert rec_client.get(f"/api/sessions/{first}/recording").status_code == 404
+    assert rec_client.get(f"/api/sessions/{first}/recording/csv").status_code == 404
     assert rec_client.get(f"/api/sessions/{second}/recording").json()["status"] == "recording"
 
 

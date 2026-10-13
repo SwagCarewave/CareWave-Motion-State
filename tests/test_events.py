@@ -165,15 +165,27 @@ def test_old_unconfirmed_event_keeps_awaiting_state_after_restart(live_settings,
     assert status["state"] != "low_motion"
 
 
-def test_list_without_filters_includes_all_sessions(app_client, sample_csv):
+def test_new_session_removes_previous_session_events(app_client, sample_csv):
     sid = _session_with_events(app_client, sample_csv)
+    first = app_client.get("/api/events", params={"session_id": sid}).json()["items"][0]
+    app_client.patch(f"/api/events/{first['id']}/confirmation", json={"result": "정상 활동"})
     app_client.post(f"/api/sessions/{sid}/stop")
+    assert app_client.get("/api/events").json()["counts"]["all"] == 2
+
     other = start_session(app_client)
+    repos = app_client.app.state.repos
+    assert app_client.get(f"/api/sessions/{sid}").status_code == 404
+    assert app_client.get(f"/api/events/{first['id']}").status_code == 404
+    assert app_client.get("/api/events").json()["counts"]["all"] == 0
+    assert repos.guardian_confirmations.list() == []
+    assert repos.signal_frames.list({"session_id": sid}) == []
+    assert repos.device_status.list({"session_id": sid}) == []
+
     shifted = [{**p, "ts": p["ts"] + 3600} for p in csv_packets(sample_csv)]
     send_packets(app_client, other, shifted)
     everything = app_client.get("/api/events").json()
-    assert everything["counts"]["all"] == 4
-    assert {e["session_id"] for e in everything["items"]} == {sid, other}
+    assert everything["counts"]["all"] == 2
+    assert {e["session_id"] for e in everything["items"]} == {other}
 
 
 @pytest.mark.supabase

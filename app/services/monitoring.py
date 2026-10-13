@@ -178,6 +178,7 @@ class SessionManager:
             running = self.repos.sessions.list({"status": "running"}, order_by="started_at", desc=True, limit=1)
             if running:
                 return self._ensure_live(running[0]).row, False
+            self._purge_stopped()
             row = self.repos.sessions.insert({
                 "status": "running",
                 "started_at": to_iso(self.clock()),
@@ -215,6 +216,25 @@ class SessionManager:
                     log.warning("session %s stopped with %d unsaved frames", session_id, len(live.pending))
                 self._publish(live, {"type": "stopped", "session_id": session_id})
             return updated
+
+    def _purge_stopped(self) -> None:
+        try:
+            ids = [r["id"] for r in self.repos.sessions.list({"status": "stopped"})]
+            if not ids:
+                return
+            events = self.repos.activity_events.list({"session_id__in": ids})
+            if events:
+                self.repos.guardian_confirmations.delete_where({"event_id__in": [e["id"] for e in events]})
+                self.repos.activity_events.delete_where({"session_id__in": ids})
+            self.repos.signal_frames.delete_where({"session_id__in": ids})
+            self.repos.device_status.delete_where({"session_id__in": ids})
+            self.repos.sessions.delete_where({"id__in": ids})
+        except Exception:
+            log.exception("could not purge stopped sessions")
+            return
+        for sid in ids:
+            self.live.pop(sid, None)
+        log.info("purged %d stopped sessions", len(ids))
 
     def get(self, session_id: str) -> LiveSession | None:
         row = self._row(session_id)
