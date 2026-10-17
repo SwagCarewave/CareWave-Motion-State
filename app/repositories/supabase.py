@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .base import BackendUnavailable, ObjectNotFound, Repositories, RepositoryError, split_filter
+from .base import BackendUnavailable, ObjectNotFound, Repositories, RepositoryError, order_columns, split_filter
 
 RETRY_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
@@ -112,11 +112,13 @@ class SupabaseTable:
         rows = self.list({"id": row_id}, limit=1)
         return rows[0] if rows else None
 
-    def list(self, filters: dict[str, Any] | None = None, order_by: str | None = None, desc: bool = False,
-             limit: int | None = None, offset: int = 0) -> list[dict]:
+    def list(self, filters: dict[str, Any] | None = None, order_by: str | tuple[str, ...] | None = None,
+             desc: bool = False, limit: int | None = None, offset: int = 0) -> list[dict]:
         params = [("select", "*"), *to_params(filters)]
-        if order_by is not None:
-            params.append(("order", f"{order_by}.{'desc' if desc else 'asc'}.nullslast"))
+        columns = order_columns(order_by)
+        if columns:
+            direction = "desc" if desc else "asc"
+            params.append(("order", ",".join(f"{c}.{direction}.nullslast" for c in columns)))
         if limit is not None:
             params.append(("limit", str(limit)))
         if offset:
@@ -205,6 +207,7 @@ def supabase_repositories(url: str, key: str, csv_bucket: str, results_bucket: s
         guardian_confirmations=SupabaseTable(http, "guardian_confirmations"),
         csv_files=SupabaseTable(http, "csv_files"),
         analyses=SupabaseTable(http, "analyses"),
+        maze_records=SupabaseTable(http, "maze_records"),
         csv_store=SupabaseObjectStore(http, csv_bucket),
         results_store=SupabaseObjectStore(http, results_bucket),
     )

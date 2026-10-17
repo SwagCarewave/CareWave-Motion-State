@@ -170,3 +170,25 @@ def test_client_error_is_not_retried():
         repos.csv_files.insert({"filename": "x"})
     assert exc.value.status == 409
     assert state["n"] == 1
+
+
+def test_multi_column_order_memory(tmp_path):
+    table = memory_repositories(tmp_path).maze_records
+    for name, sec, at in (("c", 50, "2026-10-17T00:00:03+00:00"), ("a", 50, "2026-10-17T00:00:01+00:00"),
+                          ("b", 30, "2026-10-17T00:00:02+00:00")):
+        table.insert({"name": name, "duration_sec": sec, "created_at": at})
+    assert [r["name"] for r in table.list(order_by=("duration_sec", "created_at"))] == ["b", "a", "c"]
+    assert [r["name"] for r in table.list(order_by="name", desc=True)] == ["c", "b", "a"]
+
+
+def test_multi_column_order_supabase_params():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.params.get_list("order"))
+        return httpx.Response(200, json=[])
+
+    repos = supabase_repositories("https://example.supabase.co", "k", "a", "b", transport=httpx.MockTransport(handler))
+    repos.maze_records.list(order_by=("duration_sec", "created_at"), limit=11)
+    repos.csv_files.list(order_by="created_at", desc=True)
+    assert seen == [["duration_sec.asc.nullslast,created_at.asc.nullslast"], ["created_at.desc.nullslast"]]

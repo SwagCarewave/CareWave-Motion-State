@@ -35,6 +35,12 @@ def split_filter(key: str) -> tuple[str, str]:
     return field, op
 
 
+def order_columns(order_by: str | tuple[str, ...] | None) -> tuple[str, ...]:
+    if order_by is None:
+        return ()
+    return (order_by,) if isinstance(order_by, str) else tuple(order_by)
+
+
 class Table(Protocol):
     name: str
 
@@ -46,7 +52,8 @@ class Table(Protocol):
 
     def get(self, row_id: str) -> dict | None: ...
 
-    def list(self, filters: dict[str, Any] | None = None, order_by: str | None = None, desc: bool = False,
+    def list(self, filters: dict[str, Any] | None = None, order_by: str | tuple[str, ...] | None = None,
+             desc: bool = False,
              limit: int | None = None, offset: int = 0) -> list[dict]: ...
 
     def update(self, row_id: str, changes: dict[str, Any]) -> dict | None: ...
@@ -78,6 +85,7 @@ class Repositories:
     guardian_confirmations: Table
     csv_files: Table
     analyses: Table
+    maze_records: Table
     csv_store: ObjectStore
     results_store: ObjectStore
 

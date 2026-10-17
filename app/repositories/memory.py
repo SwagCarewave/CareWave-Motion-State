@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .base import ObjectNotFound, Repositories, split_filter
+from .base import ObjectNotFound, Repositories, order_columns, split_filter
 
 
 def _now() -> str:
@@ -74,12 +74,13 @@ class MemoryTable:
             row = self._rows.get(row_id)
             return None if row is None else copy.deepcopy(row)
 
-    def list(self, filters: dict[str, Any] | None = None, order_by: str | None = None, desc: bool = False,
-             limit: int | None = None, offset: int = 0) -> list[dict]:
+    def list(self, filters: dict[str, Any] | None = None, order_by: str | tuple[str, ...] | None = None,
+             desc: bool = False, limit: int | None = None, offset: int = 0) -> list[dict]:
         with self._lock:
             rows = [r for r in self._rows.values() if _match(r, filters)]
-            if order_by is not None:
-                rows.sort(key=lambda r: (r.get(order_by) is None, r.get(order_by)), reverse=desc)
+            columns = order_columns(order_by)
+            if columns:
+                rows.sort(key=lambda r: [(r.get(c) is None, r.get(c)) for c in columns], reverse=desc)
             rows = rows[offset:]
             if limit is not None:
                 rows = rows[:limit]
@@ -160,6 +161,7 @@ def memory_repositories(storage_root: Path, csv_bucket: str = "csv-uploads",
         guardian_confirmations=MemoryTable("guardian_confirmations"),
         csv_files=MemoryTable("csv_files"),
         analyses=MemoryTable("analyses"),
+        maze_records=MemoryTable("maze_records"),
         csv_store=LocalObjectStore(storage_root, csv_bucket),
         results_store=LocalObjectStore(storage_root, results_bucket),
     )
