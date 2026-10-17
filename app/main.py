@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import analyses, events, files, replays, sessions, system
+from app.api import analyses, events, files, maze, replays, sessions, system
 from app.config import Settings, get_settings
 from app.docs.openapi import COMMON_RESPONSES, SWAGGER_UI, TAGS, TITLE
 from app.errors import UnhandledErrorMiddleware, install_error_handlers
@@ -16,6 +16,7 @@ from app.repositories import build_repositories
 from app.services.analysis import AnalysisService
 from app.services.events import EventService
 from app.services.files import FileService
+from app.services.maze import MazeService
 from app.services.model_guard import verify_model
 from app.services.monitoring import SessionManager, run_ticker
 from app.services.playback import ReplayManager, run_replay_ticker
@@ -39,6 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.files = FileService(settings, app.state.repos)
         app.state.analyses = AnalysisService(settings, app.state.repos, app.state.files)
         app.state.replays = ReplayManager(settings, app.state.analyses)
+        app.state.maze = MazeService(app.state.repos)
         app.state.udp = UdpCollector(settings, app.state.sessions)
         for recover in (app.state.files.recover, app.state.analyses.recover):
             try:
@@ -87,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(analyses.router)
     app.include_router(replays.router)
     app.include_router(replays.ws_router)
+    app.include_router(maze.router)
     return app
 
 
