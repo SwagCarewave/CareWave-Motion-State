@@ -77,8 +77,8 @@ def get_recording(request: Request, session_id: str) -> RecordingOut:
 def download_recording(request: Request, session_id: str) -> Response:
     manager = _manager(request)
     manager.row(session_id)
-    filename, data = manager.recorder.download(session_id)
-    return Response(content=data, media_type="text/csv; charset=utf-8",
+    filename, data, media_type = manager.recorder.download(session_id)
+    return Response(content=data, media_type=media_type,
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 

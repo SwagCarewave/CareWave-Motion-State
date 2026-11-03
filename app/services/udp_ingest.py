@@ -77,6 +77,9 @@ class UdpCollector(asyncio.DatagramProtocol):
     def _mesh(self, now: float, data: bytes) -> None:
         self.stats["mesh_packets"] += 1
         self.last_packet_wall = now
+        recorder = getattr(self.sessions, "recorder", None)
+        if recorder is not None:
+            recorder.write_mesh(now, data)
         if self.pose is None:
             self.stats["dropped_no_pose_model"] += 1
             return

@@ -171,3 +171,34 @@ def test_restart_clears_leftover_recordings(live_settings):
 def test_recording_of_unknown_session_is_404(rec_client):
     assert rec_client.get("/api/sessions/00000000-0000-0000-0000-000000000000/recording").status_code == 404
     assert rec_client.get("/api/sessions/00000000-0000-0000-0000-000000000000/recording/csv").status_code == 404
+
+
+def test_mesh_packets_are_recorded_as_bin_and_reupload(rec_client):
+    from test_pose_recordings import recording, wait_analysis
+
+    from app.pose.packets import iter_file
+    from app.services.udp_ingest import UdpCollector
+
+    client = rec_client
+    sid = start_session(client)
+    udp = UdpCollector(client.app.state.settings, client.app.state.sessions, clock=client.clock,
+                       pose=client.app.state.pose)
+    data = recording(14.0, start=client.clock.now)
+    count = 0
+    for stamp, payload in iter_file(io.BytesIO(data)):
+        client.clock.now = stamp
+        udp.datagram_received(payload, ("127.0.0.1", 1))
+        count += 1
+    status = client.get(f"/api/sessions/{sid}/recording").json()
+    assert status["status"] == "recording" and status["format"] == "bin"
+    _stop(client, sid)
+    status = client.get(f"/api/sessions/{sid}/recording").json()
+    assert status["downloadable"] and status["format"] == "bin" and status["packets"] == count
+    res = client.get(f"/api/sessions/{sid}/recording/csv")
+    assert res.status_code == 200 and res.headers["content-type"] == "application/octet-stream"
+    assert ".bin" in res.headers["content-disposition"]
+    assert [p for _, p in iter_file(io.BytesIO(res.content))] == [p for _, p in iter_file(io.BytesIO(data))]
+    up = client.post("/api/files", files={"file": ("live.bin", io.BytesIO(res.content), "application/octet-stream")})
+    assert up.status_code == 201 and up.json()["kind"] == "mesh6"
+    a = wait_analysis(client, up.json()["latest_analysis"]["id"])
+    assert a["status"] == "succeeded" and a["kind"] == "pose"

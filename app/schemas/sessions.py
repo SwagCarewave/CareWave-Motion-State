@@ -85,6 +85,7 @@ class RecordingOut(BaseModel):
         "session_id": "4b8f3c9e-2d6a-4f0e-9a51-6f1d2c3b4a5e",
         "status": "ready",
         "downloadable": True,
+        "format": "csv",
         "packets": 4024,
         "duration_sec": 119.85,
         "size_bytes": 2122909,
@@ -97,8 +98,9 @@ class RecordingOut(BaseModel):
 
     session_id: str = Field(description="세션 ID")
     status: RecordingStatus = Field(description=f"녹화 상태. {RECORDING_STATUS_DOC}")
-    downloadable: bool = Field(description="CSV 버튼 활성화 여부 (status가 ready일 때만 true)")
-    packets: int = Field(description="녹화한 CSI 패킷 수")
+    downloadable: bool = Field(description="추출 버튼 활성화 여부 (status가 ready일 때만 true)")
+    format: str | None = Field(default=None, description="받을 파일 형식: `csv` ESP 4대 / `bin` ESP 6대 녹화 (기록 조회에 그대로 올릴 수 있음). 녹화가 없으면 null")
+    packets: int = Field(description="녹화한 CSI 패킷 수 (bin이면 6대 패킷 수)")
     duration_sec: float = Field(description="첫 패킷부터 마지막 패킷까지 길이(초)")
     size_bytes: int | None = Field(description="CSV 파일 크기 (ready일 때만)")
     started_at: float | None = Field(description="첫 패킷 시각")

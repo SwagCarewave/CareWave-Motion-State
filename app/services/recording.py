@@ -7,11 +7,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, TextIO
+from typing import Any, BinaryIO, Callable, TextIO
 
 import numpy as np
 
 from app.config import Settings
+from app.pose.packets import FILE_HEADER
 from app.services.exceptions import ServiceError
 from motion_state.csi_io import SUB_COLS
 
@@ -22,10 +23,10 @@ HEADER = ["experiment_id", "timestamp", "label", "rx", *SUB_COLS]
 LABEL = "unlabeled"
 
 UNAVAILABLE = {
-    "none": "이 세션의 녹화가 없습니다. 취침 모드를 새로 시작하면 녹화됩니다.",
-    "recording": "아직 녹화 중입니다. 취침 모드를 끈 뒤 받을 수 있습니다.",
+    "none": "이 세션의 녹화가 없습니다. 관찰 모드를 새로 시작하면 녹화됩니다.",
+    "recording": "아직 녹화 중입니다. 관찰 모드를 끈 뒤 받을 수 있습니다.",
     "too_long": "녹화 시간이 최대 길이를 넘어 CSV를 만들지 않았습니다.",
-    "empty": "녹화된 CSI 패킷이 없습니다.",
+    "empty": "녹화된 CSI 패킷이 없습니다. (ESP 4대는 CSV, ESP 6대는 .bin으로 녹화됩니다)",
     "expired": "보관 시간이 지나 녹화가 삭제되었습니다.",
     "failed": "녹화 파일을 저장하지 못했습니다.",
 }
@@ -45,6 +46,13 @@ class Recording:
     failed: bool = False
     deleted: bool = False
     stopped_wall: float | None = None
+    mesh_path: Path | None = None
+    mesh_handle: BinaryIO | None = None
+    mesh_packets: int = 0
+
+    @property
+    def is_mesh(self) -> bool:
+        return self.mesh_packets > 0
 
     @property
     def status(self) -> str:
@@ -56,7 +64,7 @@ class Recording:
             return "recording"
         if self.deleted:
             return "expired"
-        return "ready" if self.packets else "empty"
+        return "ready" if self.packets or self.mesh_packets else "empty"
 
 
 class RecordingService:
@@ -85,7 +93,30 @@ class RecordingService:
                 log.exception("could not open raw CSI recording for session %s", session_id)
                 self.current = Recording(session_id, path, stamp, None, None, failed=True)
                 return
-            self.current = Recording(session_id, path, stamp, handle, writer)
+            self.current = Recording(session_id, path, stamp, handle, writer, mesh_path=self.dir / f"{session_id}.bin")
+
+    def write_mesh(self, ts: float, payload: bytes) -> None:
+        with self.lock:
+            rec = self.current
+            if rec is None or rec.stopped_wall is not None or rec.failed or rec.too_long or rec.mesh_path is None:
+                return
+            try:
+                if rec.mesh_handle is None:
+                    rec.mesh_handle = rec.mesh_path.open("ab")
+                if rec.first_ts is None:
+                    rec.first_ts = ts
+                if ts - rec.first_ts > self.settings.recording_max_sec:
+                    rec.too_long = True
+                    self._delete(rec)
+                    log.info("6-node recording for session %s passed the limit and was dropped", rec.session_id)
+                    return
+                rec.mesh_handle.write(FILE_HEADER.pack(ts, len(payload)) + payload)
+                rec.mesh_packets += 1
+                rec.last_ts = ts if rec.last_ts is None else max(rec.last_ts, ts)
+            except OSError:
+                log.exception("6-node recording write failed for session %s", rec.session_id)
+                rec.failed = True
+                self._delete(rec)
 
     def write(self, session_id: str, packets: list[tuple[float, str, np.ndarray]]) -> None:
         if not packets:
@@ -119,6 +150,14 @@ class RecordingService:
             if rec is None or rec.session_id != session_id or rec.stopped_wall is not None:
                 return
             rec.stopped_wall = self.clock()
+            if rec.mesh_handle is not None:
+                try:
+                    rec.mesh_handle.close()
+                except OSError:
+                    log.exception("could not close 6-node recording for session %s", session_id)
+                    rec.failed = True
+                    self._delete(rec)
+                rec.mesh_handle = None
             if rec.handle is not None:
                 try:
                     rec.handle.close()
@@ -138,7 +177,7 @@ class RecordingService:
             rec = self.current if self.current is not None and self.current.session_id == session_id else None
             return self._view(session_id, rec)
 
-    def download(self, session_id: str) -> tuple[str, bytes]:
+    def download(self, session_id: str) -> tuple[str, bytes, str]:
         with self.lock:
             self._expire()
             rec = self.current if self.current is not None and self.current.session_id == session_id else None
@@ -147,26 +186,28 @@ class RecordingService:
                 raise ServiceError(409, "recording_unavailable", UNAVAILABLE[status],
                                    {"session_id": session_id, "status": status})
             try:
-                data = rec.path.read_bytes()
+                data = rec.mesh_path.read_bytes() if rec.is_mesh else rec.path.read_bytes()
             except OSError:
                 log.exception("raw CSI recording for session %s could not be read", session_id)
                 rec.failed = True
                 self._delete(rec)
                 raise ServiceError(409, "recording_unavailable", UNAVAILABLE["failed"],
                                    {"session_id": session_id, "status": "failed"})
-            return f"csi_raw_live_{rec.experiment_id}.csv", data
+            if rec.is_mesh:
+                return f"csi_mesh6_live_{rec.experiment_id}.bin", data, "application/octet-stream"
+            return f"csi_raw_live_{rec.experiment_id}.csv", data, "text/csv; charset=utf-8"
 
     def _view(self, session_id: str, rec: Recording | None) -> dict:
         keep, limit = self.settings.recording_keep_sec, self.settings.recording_max_sec
         if rec is None:
-            return {"session_id": session_id, "status": "none", "downloadable": False, "packets": 0,
+            return {"session_id": session_id, "status": "none", "downloadable": False, "format": None, "packets": 0,
                     "duration_sec": 0.0, "size_bytes": None, "started_at": None, "ended_at": None,
                     "expires_at": None, "max_duration_sec": limit, "keep_sec": keep}
         status = rec.status
         size = None
         if status == "ready":
             try:
-                size = rec.path.stat().st_size
+                size = (rec.mesh_path if rec.is_mesh else rec.path).stat().st_size
             except OSError:
                 size = None
         span = 0.0 if rec.first_ts is None or rec.last_ts is None else round(rec.last_ts - rec.first_ts, 3)
@@ -174,7 +215,8 @@ class RecordingService:
             "session_id": session_id,
             "status": status,
             "downloadable": status == "ready",
-            "packets": rec.packets,
+            "format": "bin" if rec.is_mesh else "csv",
+            "packets": rec.mesh_packets if rec.is_mesh else rec.packets,
             "duration_sec": span,
             "size_bytes": size,
             "started_at": rec.first_ts,
@@ -193,6 +235,17 @@ class RecordingService:
             log.info("raw CSI recording for session %s expired", rec.session_id)
 
     def _delete(self, rec: Recording) -> None:
+        if rec.mesh_handle is not None:
+            try:
+                rec.mesh_handle.close()
+            except OSError:
+                pass
+            rec.mesh_handle = None
+        if rec.mesh_path is not None:
+            try:
+                rec.mesh_path.unlink(missing_ok=True)
+            except OSError:
+                log.exception("could not delete 6-node recording %s", rec.mesh_path)
         if rec.handle is not None:
             try:
                 rec.handle.close()
@@ -208,7 +261,7 @@ class RecordingService:
     def _clear_dir(self) -> None:
         if not self.dir.is_dir():
             return
-        for path in self.dir.glob("*.csv"):
+        for path in [*self.dir.glob("*.csv"), *self.dir.glob("*.bin")]:
             try:
                 path.unlink()
             except OSError:

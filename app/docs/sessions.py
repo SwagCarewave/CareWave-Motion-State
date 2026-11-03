@@ -50,18 +50,20 @@ SIGNALS = {
 
 RECORDING = {
     "summary": "실시간 녹화 상태",
-    "description": "취침 모드를 시작하면 받은 CSI 원본(raw)을 서버 디스크에 CSV로 녹화합니다. "
+    "description": "관찰 모드를 시작하면 받은 CSI 원본(raw)을 서버 디스크에 녹화합니다. ESP 4대는 CSV, ESP 6대는 .bin(`format`)입니다. "
                    "새 세션을 시작하면 이전 녹화는 바로 지웁니다. 종료 후 보관 시간(기본 5분)이 지나면 지웁니다. "
-                   "첫 패킷부터 최대 길이(기본 15분)를 넘으면 녹화를 버립니다. downloadable이 true일 때 CSV 버튼을 켭니다.",
+                   "첫 패킷부터 최대 길이(기본 15분)를 넘으면 녹화를 버립니다. downloadable이 true일 때 추출 버튼을 켭니다.",
     "responses": _NOT_FOUND,
 }
 
 RECORDING_CSV = {
-    "summary": "실시간 녹화 CSV 받기",
-    "description": "녹화한 CSI 원본을 CSV 파일로 내려받습니다. 형식은 수집기(collect_csi.py)와 같아서 "
-                   "POST /api/files 로 그대로 올리면 분석·그래프가 됩니다. 녹화 상태가 ready일 때만 받을 수 있습니다.",
+    "summary": "실시간 녹화 파일 받기 (4대 CSV / 6대 .bin)",
+    "description": "녹화한 CSI 원본을 내려받습니다. ESP 4대면 CSV(수집기 collect_csi.py와 같은 형식), ESP 6대면 .bin"
+                   "(수집 프로그램과 같은 형식)입니다. 둘 다 POST /api/files 로 그대로 올리면 분석·그래프(6대는 스켈레톤 재생까지)가 됩니다. "
+                   "녹화 상태가 ready일 때만 받을 수 있습니다. 6대 15분 녹화는 약 480MB로 업로드 한도(300MB)를 넘을 수 있습니다.",
     "responses": {
-        200: {"content": {"text/csv": {}}, "description": "CSV 파일 (Content-Disposition: attachment)"},
+        200: {"content": {"text/csv": {}, "application/octet-stream": {}},
+              "description": "CSV 또는 .bin 파일 (Content-Disposition: attachment, 파일 이름에 확장자 포함)"},
         **_NOT_FOUND,
         409: {"model": ErrorOut, "description": "받을 수 있는 녹화 없음 (recording_unavailable, detail.status)"},
     },
