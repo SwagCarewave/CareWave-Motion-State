@@ -145,7 +145,10 @@ class AnalysisService:
                                {"analysis_id": analysis_id}) from exc
         data = json.loads(gzip.decompress(raw))
         meta = {k: v for k, v in data.items() if k not in ("columns", "frames")}
-        entry = {"meta": meta, "points": columns_to_points(data["columns"]), "poses": data.get("frames")}
+        if "columns" not in data:
+            meta["graph_missing"] = True
+        points = columns_to_points(data["columns"]) if "columns" in data else []
+        entry = {"meta": meta, "points": points, "poses": data.get("frames")}
         with self.lock:
             self.cache[analysis_id] = entry
             while len(self.cache) > self.settings.results_cache_size:
@@ -166,6 +169,10 @@ class AnalysisService:
     def signals(self, analysis_id: str, window_sec: float | None = None, from_ts: float | None = None,
                 to_ts: float | None = None, max_points: int = 1200, heatmap: bool = True) -> dict:
         meta, points = self.points(analysis_id)
+        if meta.get("graph_missing"):
+            raise ServiceError(409, "graph_missing", "그래프 기능이 생기기 전에 분석한 6대 녹화라 그래프가 없습니다. "
+                               "스켈레톤 재생은 됩니다. 그래프도 보려면 파일을 지우고 다시 올려 주세요.",
+                               {"analysis_id": analysis_id})
         first = points[0]["ts"] if points else meta["record_start"]
         last = points[-1]["ts"] if points else meta["record_end"]
         end = to_ts if to_ts is not None else last

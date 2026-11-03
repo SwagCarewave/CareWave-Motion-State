@@ -129,3 +129,23 @@ def test_live_pose_graph_api_and_frames(client):
     sig = client.get("/api/pose/signals", params={"window": 3600}).json()
     assert sig["session_id"] is None and sig["count"] >= 40 and sig["step_sec"] == 0.5
     assert any(h and len(h) == 52 for h in sig["heatmap"]) and any(v is not None for v in sig["motion_index"])
+
+
+def test_old_pose_result_without_graph_gives_409_and_still_replays(client, uploaded):
+    import gzip
+    import json
+
+    a = wait_analysis(client, uploaded["latest_analysis"]["id"])
+    analyses = client.app.state.analyses
+    store = client.app.state.repos.results_store
+    path = f"{a['id']}.json.gz"
+    data = json.loads(gzip.decompress(store.get(path)))
+    data.pop("columns")
+    store.put(path, gzip.compress(json.dumps(data).encode()), "application/gzip")
+    analyses.cache.clear()
+    r = client.get(f"/api/analyses/{a['id']}/signals")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "graph_missing"
+    replay = client.post("/api/replays", json={"analysis_id": a["id"]})
+    assert replay.status_code == 201
+    with client.websocket_connect(f"/ws/replays/{replay.json()['id']}") as ws:
+        assert ws.receive_json()["model"]["name"] == "csipose_tcn_v3_posture"

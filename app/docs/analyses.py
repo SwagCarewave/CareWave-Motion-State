@@ -28,7 +28,8 @@ SIGNALS = {
     "description": "분석 결과의 움직임 강도 그래프와 CSI 히트맵 데이터를 실시간 그래프와 같은 열 형식으로 반환합니다. "
                    "구간을 주지 않으면 기록 전체입니다. 점이 max_points보다 많으면 일정 간격으로 묶습니다. "
                    "ESP 6대 녹화 분석도 같은 형식입니다(움직임 강도는 30개 선의 CSI 변화량, 활동 점수는 자세 모델의 역동성 점수, 사건 없음).",
-    "responses": {**_NOT_FOUND, 409: {"model": ErrorOut, "description": "분석이 아직 끝나지 않음 (analysis_not_ready)"},
+    "responses": {**_NOT_FOUND, 409: {"model": ErrorOut, "description": "분석이 아직 끝나지 않음 (analysis_not_ready) 또는 "
+                                                                    "그래프 기능 전에 분석한 6대 녹화라 그래프 없음 (graph_missing, 다시 업로드)"},
                   410: {"model": ErrorOut, "description": "결과 파일 없음 → 다시 분석 (result_missing)"}},
 }
 
