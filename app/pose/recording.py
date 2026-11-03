@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.pose.packets import FILE_HEADER, MAGIC, PacketError, iter_file, parse_payload
+from app.pose.signals import SignalTracker
 
 NODE_IDS = tuple(f"N{i}" for i in range(1, 7))
 
@@ -71,12 +72,20 @@ def inspect(path: Path) -> RecordingPreview:
 
 
 def analyze(path: Path, runtime, on_progress: Callable[[float], None] | None = None,
-            frame_filter: Callable[[dict], dict] | None = None) -> list[dict]:
+            frame_filter: Callable[[dict], dict] | None = None) -> tuple[list[dict], list[dict]]:
     if hasattr(runtime, "infer_last"):
         runtime.infer_last = 1 << 30
     preview_end = None
     first = None
     frames: list[dict] = []
+    graph: list[dict] = []
+    tracker = SignalTracker(runtime.links)
+
+    def collect(new: list[dict]) -> None:
+        for fr in new:
+            tracker.set_activity(fr["ts"], fr.get("activity_score"))
+        frames.extend(new)
+
     with Path(path).open("rb") as f:
         stamps = [s for s, _ in iter_file(f)]
     if stamps:
@@ -89,16 +98,19 @@ def analyze(path: Path, runtime, on_progress: Callable[[float], None] | None = N
                 _, records = parse_payload(payload)
             except PacketError:
                 continue
-            frames.extend(runtime.poll(stamp))
+            collect(runtime.poll(stamp))
+            graph.extend(tracker.poll(stamp))
             for r in records:
                 runtime.add(stamp, r)
+                tracker.add(stamp, r)
             if on_progress is not None:
                 done = (stamp - first) / span
                 if done - last_report >= 0.02:
                     last_report = done
                     on_progress(min(0.99, done))
     if preview_end is not None:
-        frames.extend(runtime.poll(preview_end + 0.1))
+        collect(runtime.poll(preview_end + 0.1))
+        graph.extend(tracker.poll(preview_end + tracker.delay))
     if frame_filter is not None:
         frames = [frame_filter(f) for f in frames]
-    return frames
+    return frames, graph
