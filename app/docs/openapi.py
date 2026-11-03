@@ -9,6 +9,7 @@ TAG_LIVE = "실시간 관찰"
 TAG_EVENTS = "활동 사건"
 TAG_CSV = "CSV 기록"
 TAG_MAZE = "미로 게임"
+TAG_POSE = "6대 자세 추정"
 
 TAGS = [
     {"name": TAG_SYSTEM},
@@ -16,6 +17,9 @@ TAGS = [
     {"name": TAG_EVENTS},
     {"name": TAG_CSV},
     {"name": TAG_MAZE},
+    {"name": TAG_POSE, "description": "ESP 6대(30개 선) 스켈레톤·행동 추정. 실시간 화면은 WebSocket `/ws/pose`: 연결 직후 snapshot"
+                                      "(model.points·skeleton으로 그림), 이후 pose(모델에 따라 0.05~0.2초마다), links(1초마다), "
+                                      "calibration(보정 끝났을 때), model(모델 교체 시)."},
 ]
 
 COMMON_RESPONSES = {
