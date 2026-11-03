@@ -61,8 +61,10 @@ def test_recording_upload_is_analyzed_into_skeleton_frames(client, settings, upl
     assert not settings.recording_uploads_path.joinpath(f"{f['id']}.bin").exists()
     listed = {x["id"]: x for x in client.get("/api/files").json()}
     assert listed[f["id"]]["kind"] == "mesh6"
-    r = client.get(f"/api/analyses/{a['id']}/signals")
-    assert r.status_code == 409 and r.json()["error"]["code"] == "pose_analysis"
+    sig = client.get(f"/api/analyses/{a['id']}/signals").json()
+    assert sig["count"] >= 25 and sig["step_sec"] == 0.5 and len(sig["heatmap"][-1]) == 52
+    assert sig["activity_threshold"] == 0.8 and set(sig["state"]) <= {"baseline_prep", "low_motion", "observing", "signal_check"}
+    assert any(v is not None for v in sig["activity_score"])
 
 
 def test_recording_replay_follows_slider(client, uploaded):
@@ -81,6 +83,7 @@ def test_recording_replay_follows_slider(client, uploaded):
                 tick = m
     current = tick["current"]
     assert current is not None and current["ts"] <= target and target - current["ts"] < 0.1
+    assert all("motion_index" in f and "heatmap" in f for f in tick["frames"]) and isinstance(tick["poses"], list)
     assert len(current["smoothed"]) == 13 and current["direction"] in {"up", "left", "right"}
     assert start <= end
 
@@ -100,3 +103,29 @@ def test_recording_rejects_wrong_files(client):
     assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_format"
     r = client.post("/api/files", files={"file": ("bad.txt", io.BytesIO(b"x"), "text/plain")})
     assert r.status_code == 422 and r.json()["error"]["code"] == "unsupported_file"
+
+
+def test_live_pose_graph_api_and_frames(client):
+    from app.pose.packets import parse_payload
+
+    service = client.app.state.pose
+    data = recording(26.0, start=time.time() - 30)
+    from app.pose.packets import iter_file
+    batch = []
+    for stamp, payload in iter_file(io.BytesIO(data)):
+        batch.append((stamp, parse_payload(payload)[1]))
+    for stamp, recs in batch:
+        service.ingest(stamp, recs)
+    with client.websocket_connect("/ws/pose") as ws:
+        snap = ws.receive_json()
+        assert "frames" in snap
+        service.tick()
+        got = None
+        while got is None:
+            m = ws.receive_json()
+            if m["type"] == "frames":
+                got = m
+    assert got["frames"] and set(got["frames"][0]) >= {"ts", "state", "motion_index", "activity_score", "heatmap"}
+    sig = client.get("/api/pose/signals", params={"window": 3600}).json()
+    assert sig["session_id"] is None and sig["count"] >= 40 and sig["step_sec"] == 0.5
+    assert any(h and len(h) == 52 for h in sig["heatmap"]) and any(v is not None for v in sig["motion_index"])
