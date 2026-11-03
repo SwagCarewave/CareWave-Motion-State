@@ -31,7 +31,7 @@
   },
   "fall": {"threshold": 0.7, "hold_sec": 0.4},
   "game": {
-    "intensity": {"stand": 0.0, "lie": 0.0, "slow_lie": 0.3, "other": 0.4, "walk": 0.8, "fall": 1.0},
+    "intensity": {"stand": 0.0, "walk": 1.0, "fall": 1.0, "lie": 0.0, "slow_lie": 0.4, "other": 0.5},
     "directions": [[0.2, "up"], [0.8, "left"], [1.0, "right"]]
   }
 }

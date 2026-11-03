@@ -122,7 +122,7 @@ def test_direction_follows_activity_thresholds(model):
     m = model.manifest
     shaper = OutputShaper(m["name"], m["points"], m["classes"], m["display"], m["game"], m["fall"])
     xy = np.zeros((3, 2), np.float32)
-    for action, expected in {"stand": "up", "two_steps": "left", "fall": "right"}.items():
+    for action, expected in {"stand": "up", "slow_lie": "left", "walk": "right"}.items():
         prob = np.array([1.0 if c == action else 0.0 for c in m["classes"]])
         frame = shaper.frame(1.0, xy, xy, prob)
         assert frame["direction"] == expected and frame["activity_score"] == m["game"]["intensity"][action]
