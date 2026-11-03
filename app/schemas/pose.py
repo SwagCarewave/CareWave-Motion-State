@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.schemas.sessions import SignalsOut
+
 POSE_EXAMPLE = {
     "type": "pose",
     "ts": 1793532990.4,
@@ -106,3 +108,7 @@ class PoseModelItem(BaseModel):
 
 class PoseSwitchIn(BaseModel):
     name: str = Field(description="바꿀 모델 폴더 이름", examples=["carewave_v3_upper_20261102"])
+
+
+class PoseSignalsOut(SignalsOut):
+    session_id: str | None = Field(default=None, description="항상 null (6대는 세션 없음)")

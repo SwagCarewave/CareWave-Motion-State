@@ -20,6 +20,16 @@ LATEST = {
     "responses": _UNAVAILABLE,
 }
 
+SIGNALS = {
+    "summary": "6대 움직임 강도·신호 변화 그래프",
+    "description": "ESP 4대 실시간 그래프(`GET /api/sessions/{id}/signals`)와 **같은 형식**의 6대 그래프입니다. 0.5초마다 한 점, 최근 1시간 보관. "
+                   "`motion_index`(움직임 강도)는 30개 선의 CSI 스펙트럼 변화량을 시작 20초 기준선과 비교한 값이라 모델과 상관없고, "
+                   "`activity_score`는 지금 모델의 역동성 점수(게임 점수)라 모델에 따라 다릅니다. `heatmap`은 서브캐리어 52개 평균 진폭(30개 선 평균), "
+                   "`activity_threshold`는 0.8(게임 우 방향 기준선). 사건은 없으므로 `events`·`event_id`는 비어 있습니다. "
+                   "새 점은 WebSocket `/ws/pose`의 `frames` 메시지로도 옵니다.",
+    "responses": _UNAVAILABLE,
+}
+
 CALIBRATE = {
     "summary": "자세 모델 다시 보정",
     "description": "보정이 필요한 모델(`calibration.required`가 true, 예: 13관절 TCN)은 데이터가 들어오기 시작한 뒤 처음 10초를 "

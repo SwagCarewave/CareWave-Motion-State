@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Request, WebSocket
+from fastapi import APIRouter, Query, Request, WebSocket
 
 from app.api.streaming import pump
 from app.docs import pose as docs
+from app.docs import sessions as session_docs
 from app.docs.openapi import TAG_POSE
 from app.pose.registry import PoseModelError
-from app.schemas.pose import CalibrationOut, PoseLatestOut, PoseModelItem, PoseStatusOut, PoseSwitchIn
+from app.schemas.pose import CalibrationOut, PoseLatestOut, PoseModelItem, PoseSignalsOut, PoseStatusOut, PoseSwitchIn
 from app.services.exceptions import ServiceError
 from app.services.pose_live import PoseModelNotFound, PoseService
 
@@ -31,6 +32,16 @@ def pose_status(request: Request) -> PoseStatusOut:
 @router.get("/latest", response_model=PoseLatestOut, **docs.LATEST)
 def pose_latest(request: Request) -> PoseLatestOut:
     return PoseLatestOut(latest=_service(request).latest)
+
+
+@router.get("/signals", response_model=PoseSignalsOut, **docs.SIGNALS)
+def pose_signals(request: Request,
+                 window: int | None = Query(default=600, ge=10, le=3600, description=session_docs.WINDOW_PARAM),
+                 from_ts: float | None = Query(default=None, alias="from", description=session_docs.FROM_PARAM),
+                 to_ts: float | None = Query(default=None, alias="to", description=session_docs.TO_PARAM),
+                 max_points: int = Query(default=1200, ge=10, le=7200, description=session_docs.MAX_POINTS_PARAM),
+                 heatmap: bool = Query(default=True, description=session_docs.HEATMAP_PARAM)) -> PoseSignalsOut:
+    return PoseSignalsOut(**_service(request).signals(window, from_ts, to_ts, max_points, heatmap))
 
 
 @router.get("/models", response_model=list[PoseModelItem], **docs.MODELS)

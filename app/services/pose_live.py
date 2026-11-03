@@ -12,11 +12,15 @@ import torch
 
 from app.pose.packets import LinkRecord
 from app.pose.registry import PoseModelError, describe, list_models, load_runtime
+from app.pose.signals import SignalTracker
+from app.services.series import build_series
 from app.services.monitoring import Subscriber
 
 log = logging.getLogger("carewave.pose")
 
 LINK_STATUS_KO = {"ok": "정상", "weak": "신호 부족", "lost": "연결 끊김", "none": "미연결"}
+GRAPH_STEP_SEC = 0.5
+ACTIVITY_LINE = 0.8
 
 
 class PoseModelNotFound(LookupError):
@@ -25,7 +29,8 @@ class PoseModelNotFound(LookupError):
 
 class PoseService:
     def __init__(self, models_dir: Path, active: str, rate_window_sec: float = 2.0, weak_hz: float = 20.0,
-                 lost_sec: float = 2.0, poll_margin_sec: float = 0.1, clock: Callable[[], float] = time.time):
+                 lost_sec: float = 2.0, poll_margin_sec: float = 0.1, clock: Callable[[], float] = time.time,
+                 retention_sec: float = 3600.0, burst_sec: float = 10.0):
         self.models_dir = Path(models_dir)
         self.rate_window_sec = rate_window_sec
         self.weak_hz = weak_hz
@@ -41,6 +46,9 @@ class PoseService:
         self.latest: dict | None = None
         self.last_record_wall: float | None = None
         self.runtime = self._load(active)
+        self.tracker = SignalTracker(self.runtime.links, step_sec=GRAPH_STEP_SEC)
+        self.graph: deque = deque(maxlen=int(retention_sec / GRAPH_STEP_SEC))
+        self.burst_sec = burst_sec
         self._reset_links()
 
     def _load(self, name: str):
@@ -74,6 +82,7 @@ class PoseService:
     def recalibrate(self) -> dict:
         with self.lock:
             self.runtime.reset()
+            self.tracker.reset()
             self.latest = None
             self.recent.clear()
         info = self.calibration()
@@ -109,28 +118,50 @@ class PoseService:
         with self.inbox_lock:
             batch, self.inbox = self.inbox, []
         frames: list[dict] = []
+        graph: list[dict] = []
         with self.lock:
-            runtime = self.runtime
+            runtime, tracker = self.runtime, self.tracker
             was_calibrating = self.calibration()["active"]
+
+            def collect(new: list[dict]) -> None:
+                for f in new:
+                    tracker.set_activity(f["ts"], f.get("activity_score"))
+                frames.extend(new)
+
             for ts, records in batch:
-                frames.extend(runtime.poll(ts - self.poll_margin_sec))
+                collect(runtime.poll(ts - self.poll_margin_sec))
+                graph.extend(tracker.poll(ts - self.poll_margin_sec))
                 self.last_record_wall = ts
                 for r in records:
+                    tracker.add(ts, r)
                     if runtime.add(ts, r):
                         self.stats["records"] += 1
                         self.link_times[r.link].append(ts)
                         self.link_last[r.link] = ts
                     else:
                         self.stats["rejected_unknown_link"] += 1
-            frames.extend(runtime.poll(now - self.poll_margin_sec))
+            collect(runtime.poll(now - self.poll_margin_sec))
+            graph.extend(tracker.poll(now - self.poll_margin_sec))
             for f in frames:
                 self.latest = f
                 self.recent.append(f)
+            self.graph.extend(graph)
             calibration = self.calibration()
         if was_calibrating and not calibration["active"]:
             self._publish({"type": "calibration", "calibration": calibration})
+        if graph:
+            self._publish({"type": "frames", "frames": graph})
         for f in frames:
             self._publish(f)
+
+    def signals(self, window_sec: float | None = 600, from_ts: float | None = None, to_ts: float | None = None,
+                max_points: int = 1200, heatmap: bool = True) -> dict:
+        with self.lock:
+            points = list(self.graph)
+        end = to_ts if to_ts is not None else (points[-1]["ts"] if points else self.clock())
+        start = from_ts if from_ts is not None else end - (window_sec or 3600)
+        return {"session_id": None, **build_series(points, [], start, end, max_points, heatmap, ACTIVITY_LINE,
+                                                   GRAPH_STEP_SEC, self.burst_sec)}
 
     def publish_links(self) -> None:
         self._publish({"type": "links", **self.links()})
@@ -170,8 +201,10 @@ class PoseService:
                 "predictions": self.runtime.predictions, **self.links()}
 
     def snapshot(self) -> dict:
+        with self.lock:
+            graph = list(self.graph)[-120:]
         return {"type": "snapshot", "model": self.model_info(), "latest": self.latest,
-                "recent": list(self.recent), **self.links()}
+                "recent": list(self.recent), "frames": graph, **self.links()}
 
     def subscribe(self, loop: asyncio.AbstractEventLoop, maxsize: int = 256) -> Subscriber:
         sub = Subscriber(asyncio.Queue(maxsize=maxsize), loop)
