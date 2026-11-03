@@ -115,7 +115,21 @@ class ReplayManager:
                 replay.subscribers.discard(sub)
 
     def snapshot(self, replay_id: str) -> dict:
-        return {"type": "state", "replay": self.state(replay_id)}
+        view = self.state(replay_id)
+        message = {"type": "state", "replay": view}
+        try:
+            meta, points = self.analyses.points(view["analysis_id"])
+        except ServiceError:
+            return message
+        if meta.get("kind") == "pose":
+            message["model"] = meta.get("model")
+            message["current"] = self._current(points, view["position_ts"])
+        return message
+
+    @staticmethod
+    def _current(points: list[dict], pos: float) -> dict | None:
+        i = bisect.bisect_right([p["ts"] for p in points], pos)
+        return points[i - 1] if i else None
 
     def tick(self) -> None:
         now = self.clock()
@@ -141,14 +155,17 @@ class ReplayManager:
             if view["status"] != "playing" and since == pos:
                 return
         try:
-            _, points = self.analyses.points(replay.analysis_id)
+            meta, points = self.analyses.points(replay.analysis_id)
         except ServiceError:
             return
         frames = []
         if pos > since:
             times = [p["ts"] for p in points]
             frames = points[bisect.bisect_right(times, since):bisect.bisect_right(times, pos)]
-        self._publish(replay, {"type": "tick", "replay": view, "frames": frames})
+        message = {"type": "tick", "replay": view, "frames": frames}
+        if meta.get("kind") == "pose":
+            message["current"] = self._current(points, pos)
+        self._publish(replay, message)
 
     def _on_file_delete(self, file_row: dict, analyses: list[dict]) -> None:
         self._remove_for({a["id"] for a in analyses})
