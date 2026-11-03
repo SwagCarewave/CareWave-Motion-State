@@ -27,6 +27,7 @@ log = logging.getLogger("carewave.analysis")
 
 RESULT_VERSION = 1
 POSE_KIND = "pose"
+POSE_ACTIVITY_LINE = 0.8
 POSE_FRAME_FIELDS = ("ts", "smoothed", "action", "posture", "activity_score", "direction", "direction_ko", "fall_alarm")
 FAIL_MESSAGES = {
     "source_missing": "원본 CSV를 찾을 수 없습니다. 파일을 다시 올려 주세요.",
@@ -124,11 +125,18 @@ class AnalysisService:
         }
 
     def points(self, analysis_id: str) -> tuple[dict, list[dict]]:
+        cached = self._load(analysis_id)
+        return cached["meta"], cached["points"]
+
+    def poses(self, analysis_id: str) -> list[dict]:
+        return self._load(analysis_id).get("poses") or []
+
+    def _load(self, analysis_id: str) -> dict:
         with self.lock:
             cached = self.cache.get(analysis_id)
             if cached is not None:
                 self.cache.move_to_end(analysis_id)
-                return cached["meta"], cached["points"]
+                return cached
         row = self.ready_row(analysis_id)
         try:
             raw = self.repos.results_store.get(row["result_path"])
@@ -136,17 +144,13 @@ class AnalysisService:
             raise ServiceError(410, "result_missing", "분석 결과를 찾을 수 없습니다. 다시 분석해 주세요.",
                                {"analysis_id": analysis_id}) from exc
         data = json.loads(gzip.decompress(raw))
-        if data.get("kind") == POSE_KIND:
-            meta = {k: v for k, v in data.items() if k != "frames"}
-            points = data["frames"]
-        else:
-            meta = {k: v for k, v in data.items() if k != "columns"}
-            points = columns_to_points(data["columns"])
+        meta = {k: v for k, v in data.items() if k not in ("columns", "frames")}
+        entry = {"meta": meta, "points": columns_to_points(data["columns"]), "poses": data.get("frames")}
         with self.lock:
-            self.cache[analysis_id] = {"meta": meta, "points": points}
+            self.cache[analysis_id] = entry
             while len(self.cache) > self.settings.results_cache_size:
                 self.cache.popitem(last=False)
-        return meta, points
+        return entry
 
     def markers(self, analysis_id: str) -> list[dict]:
         rows = self.repos.activity_events.list({"analysis_id": analysis_id}, order_by="event_no")
@@ -162,9 +166,6 @@ class AnalysisService:
     def signals(self, analysis_id: str, window_sec: float | None = None, from_ts: float | None = None,
                 to_ts: float | None = None, max_points: int = 1200, heatmap: bool = True) -> dict:
         meta, points = self.points(analysis_id)
-        if meta.get("kind") == POSE_KIND:
-            raise ServiceError(409, "pose_analysis", "ESP 6대 녹화 분석은 그래프·히트맵 없이 스켈레톤 재생만 있습니다.",
-                               {"analysis_id": analysis_id})
         first = points[0]["ts"] if points else meta["record_start"]
         last = points[-1]["ts"] if points else meta["record_end"]
         end = to_ts if to_ts is not None else last
@@ -285,13 +286,14 @@ class AnalysisService:
                     raise AnalysisCancelled()
                 self._update(analysis_id, {"progress": round(value, 4)})
 
-            frames = analyze_recording(source, runtime, on_progress,
-                                       lambda f: {k: f[k] for k in POSE_FRAME_FIELDS if k in f})
+            frames, graph = analyze_recording(source, runtime, on_progress,
+                                              lambda f: {k: f[k] for k in POSE_FRAME_FIELDS if k in f})
             start, end = from_iso(file_row["record_start"]), from_iso(file_row["record_end"])
             meta = {"version": RESULT_VERSION, "kind": POSE_KIND, "analysis_id": analysis_id, "file_id": file_row["id"],
+                    "step_sec": self.settings.frame_step_sec, "threshold": POSE_ACTIVITY_LINE,
                     "record_start": start, "record_end": end, "model": model}
-            payload = gzip.compress(json.dumps({**meta, "frames": frames}, ensure_ascii=False,
-                                               separators=(",", ":")).encode("utf-8"))
+            payload = gzip.compress(json.dumps({**meta, "columns": points_to_columns(graph), "frames": frames},
+                                               ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
             summary = {"record_start": start, "record_end": end, "duration_sec": round(end - start, 3),
                        "kind": POSE_KIND, "model": model}
             with self.finalize_lock:
@@ -305,7 +307,7 @@ class AnalysisService:
                 if updated is None:
                     raise AnalysisCancelled()
                 with self.lock:
-                    self.cache[analysis_id] = {"meta": meta, "points": frames}
+                    self.cache[analysis_id] = {"meta": meta, "points": graph, "poses": frames}
                     while len(self.cache) > self.settings.results_cache_size:
                         self.cache.popitem(last=False)
             source.unlink(missing_ok=True)

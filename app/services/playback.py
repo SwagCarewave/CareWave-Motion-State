@@ -118,12 +118,12 @@ class ReplayManager:
         view = self.state(replay_id)
         message = {"type": "state", "replay": view}
         try:
-            meta, points = self.analyses.points(view["analysis_id"])
+            meta, _ = self.analyses.points(view["analysis_id"])
         except ServiceError:
             return message
         if meta.get("kind") == "pose":
             message["model"] = meta.get("model")
-            message["current"] = self._current(points, view["position_ts"])
+            message["current"] = self._current(self.analyses.poses(view["analysis_id"]), view["position_ts"])
         return message
 
     @staticmethod
@@ -164,7 +164,10 @@ class ReplayManager:
             frames = points[bisect.bisect_right(times, since):bisect.bisect_right(times, pos)]
         message = {"type": "tick", "replay": view, "frames": frames}
         if meta.get("kind") == "pose":
-            message["current"] = self._current(points, pos)
+            poses = self.analyses.poses(replay.analysis_id)
+            times = [p["ts"] for p in poses]
+            message["current"] = self._current(poses, pos)
+            message["poses"] = poses[bisect.bisect_right(times, since):bisect.bisect_right(times, pos)] if pos > since else []
         self._publish(replay, message)
 
     def _on_file_delete(self, file_row: dict, analyses: list[dict]) -> None:
