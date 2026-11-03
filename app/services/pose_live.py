@@ -10,9 +10,8 @@ from typing import Callable
 
 import torch
 
-from app.pose.output import ACTION_KO, DIRECTION_KO, POSTURE_KO
 from app.pose.packets import LinkRecord
-from app.pose.registry import PoseModelError, list_models, load_runtime
+from app.pose.registry import PoseModelError, describe, list_models, load_runtime
 from app.services.monitoring import Subscriber
 
 log = logging.getLogger("carewave.pose")
@@ -84,23 +83,17 @@ class PoseService:
     def calibration(self) -> dict:
         return self.runtime.calibration() or {"required": False, "active": False, "progress": 1.0, "seconds": 0.0}
 
+    @property
+    def active_name(self) -> str:
+        return self.runtime.name
+
     def model_info(self) -> dict:
         m = self.runtime.manifest
-        return {
-            "name": m["name"],
-            "type": m.get("type"),
-            "title": m.get("title", m["name"]),
-            "points": m["points"],
-            "skeleton": m.get("skeleton", []),
-            "classes": m["classes"],
-            "links": m["links"],
-            "image_size": m.get("image_size"),
-            "display": m.get("display", {}),
-            "game": m.get("game", {}),
-            "fall": m.get("fall", {}),
-            "labels": {"action": {c: ACTION_KO.get(c, c) for c in m["classes"]}, "posture": POSTURE_KO,
-                       "direction": DIRECTION_KO, "link_status": LINK_STATUS_KO},
-        }
+        info = describe(m)
+        info.update({"links": m["links"], "display": m.get("display", {}), "game": m.get("game", {}),
+                     "fall": m.get("fall", {})})
+        info["labels"]["link_status"] = LINK_STATUS_KO
+        return info
 
     def ingest(self, ts: float, records: list[LinkRecord]) -> None:
         if not records:

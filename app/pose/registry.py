@@ -44,6 +44,22 @@ def load_runtime(directory: Path, verify: bool = True):
     return kinds[kind](Path(directory), manifest, verify)
 
 
+def describe(manifest: dict) -> dict:
+    from app.pose.output import ACTION_KO, DIRECTION_KO, POSTURE_KO
+
+    return {
+        "name": manifest["name"],
+        "type": manifest.get("type"),
+        "title": manifest.get("title", manifest["name"]),
+        "points": manifest["points"],
+        "skeleton": manifest.get("skeleton", []),
+        "classes": manifest["classes"],
+        "image_size": manifest.get("image_size"),
+        "labels": {"action": {c: ACTION_KO.get(c, c) for c in manifest["classes"]}, "posture": POSTURE_KO,
+                   "direction": DIRECTION_KO},
+    }
+
+
 def list_models(root: Path) -> list[dict]:
     out = []
     for path in sorted(Path(root).glob("*/manifest.json")):
