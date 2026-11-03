@@ -38,11 +38,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.repos = build_repositories(settings)
         app.state.sessions = SessionManager(settings, app.state.repos, app.state.model_info.sha256)
         app.state.events = EventService(app.state.repos, app.state.sessions, burst_sec=settings.event_burst_sec)
+        app.state.pose = build_pose_service(settings.pose_models_dir, settings.pose_model) if settings.pose_enabled else None
         app.state.files = FileService(settings, app.state.repos)
-        app.state.analyses = AnalysisService(settings, app.state.repos, app.state.files)
+        app.state.analyses = AnalysisService(
+            settings, app.state.repos, app.state.files,
+            pose_model=lambda: app.state.pose.active_name if app.state.pose is not None else settings.pose_model)
         app.state.replays = ReplayManager(settings, app.state.analyses)
         app.state.maze = MazeService(app.state.repos)
-        app.state.pose = build_pose_service(settings.pose_models_dir, settings.pose_model) if settings.pose_enabled else None
         app.state.udp = UdpCollector(settings, app.state.sessions, pose=app.state.pose)
         for recover in (app.state.files.recover, app.state.analyses.recover):
             try:

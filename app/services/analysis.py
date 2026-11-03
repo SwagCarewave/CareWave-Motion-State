@@ -13,19 +13,25 @@ from pathlib import Path
 from typing import Callable
 
 from app.config import Settings
+from app.pose.recording import analyze as analyze_recording
+from app.pose.registry import describe, load_runtime
 from app.repositories import BackendUnavailable, ObjectNotFound, Repositories, RepositoryError
 from app.services.csv_reader import CsvValidationError, load_csi_csv
 from app.services.engine import build_engine, run_table
 from app.services.exceptions import ServiceError, not_found
-from app.services.files import ACTIVE_ANALYSIS, FileService, purge_analyses
+from app.services.files import ACTIVE_ANALYSIS, RECORDING_KIND, FileService, kind_of, purge_analyses
 from app.services.series import build_series, columns_to_points, points_to_columns
 from app.timeutil import from_iso, to_iso
 
 log = logging.getLogger("carewave.analysis")
 
 RESULT_VERSION = 1
+POSE_KIND = "pose"
+POSE_FRAME_FIELDS = ("ts", "smoothed", "action", "posture", "activity_score", "direction", "direction_ko", "fall_alarm")
 FAIL_MESSAGES = {
     "source_missing": "원본 CSV를 찾을 수 없습니다. 파일을 다시 올려 주세요.",
+    "recording_missing": "6대 녹화 원본은 분석이 끝나면 보관하지 않습니다. 다시 분석하려면 파일을 다시 올려 주세요.",
+    "pose_unavailable": "자세 모델을 불러오지 못했습니다. 서버 설정을 확인해 주세요.",
     "storage_unavailable": "저장소에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.",
     "interrupted": "서버가 다시 시작되어 분석이 중단되었습니다. 다시 시도해 주세요.",
     "cancelled": "파일이 삭제되어 분석을 멈췄습니다.",
@@ -39,11 +45,12 @@ class AnalysisCancelled(Exception):
 
 class AnalysisService:
     def __init__(self, settings: Settings, repos: Repositories, files: FileService,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, pose_model: Callable[[], str] | None = None):
         self.settings = settings
         self.repos = repos
         self.files = files
         self.clock = clock
+        self.pose_model = pose_model or (lambda: settings.pose_model)
         self.executor = ThreadPoolExecutor(max_workers=settings.analysis_workers, thread_name_prefix="analysis")
         self.cancelled: set[str] = set()
         self.cache: OrderedDict[str, dict] = OrderedDict()
@@ -51,6 +58,7 @@ class AnalysisService:
         self.finalize_lock = threading.Lock()
         self.on_retire: list[Callable[[set[str]], None]] = []
         files.on_delete.append(self._on_file_delete)
+        files.on_uploaded.append(self._on_uploaded)
 
     def recover(self) -> None:
         for row in self.repos.analyses.list({"status__in": list(ACTIVE_ANALYSIS)}):
@@ -106,6 +114,8 @@ class AnalysisService:
             "record_start": summary.get("record_start"),
             "record_end": summary.get("record_end"),
             "duration_sec": summary.get("duration_sec"),
+            "kind": summary.get("kind", "signals"),
+            "pose_model": summary.get("model"),
             "error_code": row.get("error_code"),
             "error_message": row.get("error_message"),
             "started_at": from_iso(row.get("started_at")),
@@ -126,8 +136,12 @@ class AnalysisService:
             raise ServiceError(410, "result_missing", "분석 결과를 찾을 수 없습니다. 다시 분석해 주세요.",
                                {"analysis_id": analysis_id}) from exc
         data = json.loads(gzip.decompress(raw))
-        meta = {k: v for k, v in data.items() if k != "columns"}
-        points = columns_to_points(data["columns"])
+        if data.get("kind") == POSE_KIND:
+            meta = {k: v for k, v in data.items() if k != "frames"}
+            points = data["frames"]
+        else:
+            meta = {k: v for k, v in data.items() if k != "columns"}
+            points = columns_to_points(data["columns"])
         with self.lock:
             self.cache[analysis_id] = {"meta": meta, "points": points}
             while len(self.cache) > self.settings.results_cache_size:
@@ -148,6 +162,9 @@ class AnalysisService:
     def signals(self, analysis_id: str, window_sec: float | None = None, from_ts: float | None = None,
                 to_ts: float | None = None, max_points: int = 1200, heatmap: bool = True) -> dict:
         meta, points = self.points(analysis_id)
+        if meta.get("kind") == POSE_KIND:
+            raise ServiceError(409, "pose_analysis", "ESP 6대 녹화 분석은 그래프·히트맵 없이 스켈레톤 재생만 있습니다.",
+                               {"analysis_id": analysis_id})
         first = points[0]["ts"] if points else meta["record_start"]
         last = points[-1]["ts"] if points else meta["record_end"]
         end = to_ts if to_ts is not None else last
@@ -163,6 +180,9 @@ class AnalysisService:
         return {"analysis_id": analysis_id, "file_id": meta.get("file_id"), **series}
 
     def _run(self, analysis_id: str, file_row: dict) -> None:
+        if kind_of(file_row) == RECORDING_KIND:
+            self._run_recording(analysis_id, file_row)
+            return
         result_path = f"{analysis_id}.json.gz"
         try:
             self._update(analysis_id, {"status": "running", "started_at": to_iso(self.clock()), "progress": 0.0})
@@ -243,6 +263,73 @@ class AnalysisService:
             self._fail(analysis_id, "analysis_error")
         finally:
             self.cancelled.discard(analysis_id)
+
+    def _run_recording(self, analysis_id: str, file_row: dict) -> None:
+        result_path = f"{analysis_id}.json.gz"
+        source = self.files.recording_path(file_row["id"])
+        try:
+            self._update(analysis_id, {"status": "running", "started_at": to_iso(self.clock()), "progress": 0.0})
+            if not source.is_file():
+                self._fail(analysis_id, "recording_missing")
+                return
+            try:
+                runtime = load_runtime(self.settings.pose_models_dir / self.pose_model())
+            except Exception:
+                log.exception("analysis %s: pose model could not be loaded", analysis_id)
+                self._fail(analysis_id, "pose_unavailable")
+                return
+            model = describe(runtime.manifest)
+
+            def on_progress(value: float) -> None:
+                if analysis_id in self.cancelled:
+                    raise AnalysisCancelled()
+                self._update(analysis_id, {"progress": round(value, 4)})
+
+            frames = analyze_recording(source, runtime, on_progress,
+                                       lambda f: {k: f[k] for k in POSE_FRAME_FIELDS if k in f})
+            start, end = from_iso(file_row["record_start"]), from_iso(file_row["record_end"])
+            meta = {"version": RESULT_VERSION, "kind": POSE_KIND, "analysis_id": analysis_id, "file_id": file_row["id"],
+                    "record_start": start, "record_end": end, "model": model}
+            payload = gzip.compress(json.dumps({**meta, "frames": frames}, ensure_ascii=False,
+                                               separators=(",", ":")).encode("utf-8"))
+            summary = {"record_start": start, "record_end": end, "duration_sec": round(end - start, 3),
+                       "kind": POSE_KIND, "model": model}
+            with self.finalize_lock:
+                if analysis_id in self.cancelled:
+                    raise AnalysisCancelled()
+                self.repos.results_store.put(result_path, payload, "application/gzip")
+                updated = self.repos.analyses.update(analysis_id, {
+                    "status": "succeeded", "progress": 1.0, "result_path": result_path, "frame_count": len(frames),
+                    "event_count": 0, "summary": summary, "error_code": None, "error_message": None,
+                    "finished_at": to_iso(self.clock())})
+                if updated is None:
+                    raise AnalysisCancelled()
+                with self.lock:
+                    self.cache[analysis_id] = {"meta": meta, "points": frames}
+                    while len(self.cache) > self.settings.results_cache_size:
+                        self.cache.popitem(last=False)
+            source.unlink(missing_ok=True)
+            self._retire_previous(file_row["id"], analysis_id)
+        except AnalysisCancelled:
+            with self.finalize_lock:
+                self._cleanup_partial(analysis_id, result_path)
+                with self.lock:
+                    self.cache.pop(analysis_id, None)
+            self._fail(analysis_id, "cancelled")
+        except BackendUnavailable:
+            log.exception("analysis %s: storage unavailable", analysis_id)
+            self._cleanup_partial(analysis_id, result_path)
+            self._fail(analysis_id, "storage_unavailable")
+        except Exception:
+            log.exception("analysis %s failed", analysis_id)
+            self._cleanup_partial(analysis_id, result_path)
+            self._fail(analysis_id, "analysis_error")
+        finally:
+            self.cancelled.discard(analysis_id)
+
+    def _on_uploaded(self, file_row: dict) -> None:
+        if kind_of(file_row) == RECORDING_KIND:
+            self.start(file_row["id"])
 
     def _carry_confirmations(self, file_id: str, analysis_id: str, event_rows: list[dict]) -> None:
         previous = [a for a in self.repos.analyses.list({"file_id": file_id, "status": "succeeded"})

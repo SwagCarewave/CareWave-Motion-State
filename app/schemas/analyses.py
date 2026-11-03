@@ -18,6 +18,8 @@ class AnalysisOut(BaseModel):
         "record_start": None,
         "record_end": None,
         "duration_sec": None,
+        "kind": "signals",
+        "pose_model": None,
         "error_code": None,
         "error_message": None,
         "started_at": 1791420010.1,
@@ -30,11 +32,14 @@ class AnalysisOut(BaseModel):
     status: AnalysisStatus = Field(description=f"분석 상태. {ANALYSIS_STATUS_DOC}")
     progress: float = Field(description="진행률 0~1 (진행 막대)")
     attempt: int = Field(description="이 파일의 몇 번째 분석인지")
-    frame_count: int | None = Field(description="계산된 0.5초 프레임 수 (완료 후)")
+    frame_count: int | None = Field(description="계산된 프레임 수 (완료 후. signals는 0.5초, pose는 모델에 따라 0.05~0.2초 간격)")
     event_count: int | None = Field(description="감지된 활동 사건 수 (완료 후, '감지된 활동 사건 N건')")
     record_start: float | None = Field(description="기록 시작 시각 (완료 후)")
     record_end: float | None = Field(description="기록 끝 시각 (완료 후)")
     duration_sec: float | None = Field(description="기록 길이(초) (완료 후)")
+    kind: str = Field(description="결과 종류: `signals` 그래프·히트맵·사건 (ESP 4대 CSV) | `pose` 스켈레톤 재생 (ESP 6대 녹화)")
+    pose_model: dict | None = Field(description="pose 결과만: 분석한 모델 정보 (name, points, skeleton, classes, image_size, labels). "
+                                                "재생 화면은 points·skeleton으로 그림")
     error_code: str | None = Field(description=f"실패 코드. {ANALYSIS_ERROR_DOC}")
     error_message: str | None = Field(description="실패 안내 문구 ('분석하지 못했습니다' 화면 표시용)")
     started_at: float | None = Field(description="분석 시작 시각")
