@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import shutil
 import tempfile
 import uuid
 from pathlib import Path
 from typing import BinaryIO, Callable
 
 from app.config import Settings
+from app.pose.recording import RecordingError, inspect
 from app.repositories import Repositories, RepositoryError
 from app.services.csv_reader import CsvValidationError, load_csi_csv
 from app.services.exceptions import ServiceError, not_found
@@ -18,6 +20,8 @@ log = logging.getLogger("carewave.files")
 
 CHUNK = 1024 * 1024
 ACTIVE_ANALYSIS = ("queued", "running")
+CSV_KIND = "csi4"
+RECORDING_KIND = "mesh6"
 
 
 def purge_analyses(repos: Repositories, analyses: list[dict]) -> None:
@@ -32,6 +36,10 @@ def purge_analyses(repos: Repositories, analyses: list[dict]) -> None:
         repos.guardian_confirmations.delete_where({"event_id__in": [e["id"] for e in events]})
         repos.activity_events.delete_where({"analysis_id__in": ids})
     repos.analyses.delete_where({"id__in": ids})
+
+
+def kind_of(row: dict) -> str:
+    return row.get("kind") or CSV_KIND
 
 
 def _analysis_view(row: dict | None) -> dict | None:
@@ -53,16 +61,20 @@ class FileService:
         self.settings = settings
         self.repos = repos
         self.on_delete: list[Callable[[dict, list[dict]], None]] = []
+        self.on_uploaded: list[Callable[[dict], None]] = []
 
     def upload(self, filename: str | None, source: BinaryIO) -> dict:
         name = Path(filename or "").name.strip()
+        if name.lower().endswith(".bin"):
+            return self._upload_recording(name, source)
         if not name.lower().endswith(".csv"):
-            raise ServiceError(422, "unsupported_file", "CSV 파일만 올릴 수 있습니다.", {"filename": name})
+            raise ServiceError(422, "unsupported_file", "CSV(ESP 4대) 또는 .bin(ESP 6대 녹화) 파일만 올릴 수 있습니다.",
+                               {"filename": name})
         fd, tmp_name = tempfile.mkstemp(suffix=".csv")
         tmp = Path(tmp_name)
         try:
             try:
-                size, digest = self._copy_limited(source, fd)
+                size, digest = self._copy_limited(source, fd, self.settings.max_upload_mb)
             finally:
                 os.close(fd)
             if size == 0:
@@ -75,6 +87,7 @@ class FileService:
         file_id = str(uuid.uuid4())
         row = self.repos.csv_files.insert({
             "id": file_id,
+            "kind": CSV_KIND,
             "filename": name,
             "storage_path": f"{file_id}.csv",
             "size_bytes": size,
@@ -102,6 +115,57 @@ class FileService:
             self._discard(row)
             raise
 
+    def _upload_recording(self, name: str, source: BinaryIO) -> dict:
+        folder = self.settings.recording_uploads_path
+        folder.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(suffix=".bin", dir=folder)
+        tmp = Path(tmp_name)
+        try:
+            try:
+                size, digest = self._copy_limited(source, fd, self.settings.max_recording_mb)
+            finally:
+                os.close(fd)
+            if size == 0:
+                raise CsvValidationError("empty_file", "빈 파일입니다. 다른 파일을 선택해 주세요.")
+            try:
+                p = inspect(tmp)
+            except RecordingError as exc:
+                raise CsvValidationError(exc.code, exc.message, exc.detail) from exc
+            file_id = str(uuid.uuid4())
+            target = self.recording_path(file_id)
+            shutil.move(str(tmp), target)
+        finally:
+            tmp.unlink(missing_ok=True)
+        try:
+            row = self.repos.csv_files.insert({
+                "id": file_id,
+                "kind": RECORDING_KIND,
+                "filename": name,
+                "storage_path": f"{file_id}.bin",
+                "size_bytes": size,
+                "sha256": digest,
+                "status": "uploaded",
+                "rows": p.records,
+                "packets": p.packets,
+                "incomplete_rows": p.rejected_packets,
+                "receivers": list(p.by_node),
+                "packets_by_rx": p.by_node,
+                "record_start": to_iso(p.start_ts),
+                "record_end": to_iso(p.end_ts),
+            })
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+        for hook in self.on_uploaded:
+            try:
+                hook(row)
+            except Exception:
+                log.exception("upload hook failed for file %s", file_id)
+        return self.view(row, self._latest_analyses([file_id]).get(file_id))
+
+    def recording_path(self, file_id: str) -> Path:
+        return self.settings.recording_uploads_path / f"{file_id}.bin"
+
     def list(self) -> list[dict]:
         rows = self.repos.csv_files.list({"status": "uploaded"}, order_by="created_at", desc=True)
         latest = self._latest_analyses([r["id"] for r in rows])
@@ -127,7 +191,10 @@ class FileService:
         analyses = self.repos.analyses.list({"file_id": file_id})
         for hook in self.on_delete:
             hook(row, analyses)
-        self.repos.csv_store.delete([row["storage_path"]])
+        if kind_of(row) == RECORDING_KIND:
+            self.recording_path(file_id).unlink(missing_ok=True)
+        else:
+            self.repos.csv_store.delete([row["storage_path"]])
         purge_analyses(self.repos, self.repos.analyses.list({"file_id": file_id}))
         self.repos.csv_files.delete(file_id)
 
@@ -139,6 +206,7 @@ class FileService:
         start, end = from_iso(row["record_start"]), from_iso(row["record_end"])
         return {
             "id": row["id"],
+            "kind": kind_of(row),
             "filename": row["filename"],
             "size_bytes": row["size_bytes"],
             "rows": row["rows"],
@@ -161,16 +229,16 @@ class FileService:
             latest.setdefault(a["file_id"], a)
         return latest
 
-    def _copy_limited(self, source: BinaryIO, fd: int) -> tuple[int, str]:
+    def _copy_limited(self, source: BinaryIO, fd: int, limit_mb: int) -> tuple[int, str]:
         size, digest = 0, hashlib.sha256()
-        limit = self.settings.max_upload_bytes
+        limit = limit_mb * 1024 * 1024
         while True:
             chunk = source.read(CHUNK)
             if not chunk:
                 return size, digest.hexdigest()
             size += len(chunk)
             if size > limit:
-                raise ServiceError(413, "file_too_large", f"파일이 너무 큽니다. 최대 {self.settings.max_upload_mb}MB까지 올릴 수 있습니다.",
+                raise ServiceError(413, "file_too_large", f"파일이 너무 큽니다. 최대 {limit_mb}MB까지 올릴 수 있습니다.",
                                    {"max_bytes": limit})
             digest.update(chunk)
             os.write(fd, chunk)

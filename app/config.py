@@ -45,6 +45,7 @@ class Settings:
     storage_backend: str = "memory"
     local_storage_dir: Path = ROOT / "outputs" / "storage"
     max_upload_mb: int = 50
+    max_recording_mb: int = 300
     live_retention_sec: int = 3600
     frame_step_sec: float = 0.5
     rx_weak_rate: float = 3.0
@@ -86,6 +87,14 @@ class Settings:
         return self.max_upload_mb * 1024 * 1024
 
     @property
+    def max_recording_bytes(self) -> int:
+        return self.max_recording_mb * 1024 * 1024
+
+    @property
+    def recording_uploads_path(self) -> Path:
+        return self.local_storage_dir.parent / "mesh_uploads"
+
+    @property
     def recordings_path(self) -> Path:
         return self.recording_dir or self.local_storage_dir.parent / "recordings"
 
@@ -106,6 +115,7 @@ def load_settings() -> Settings:
         storage_backend=_env("STORAGE_BACKEND", "memory"),
         local_storage_dir=Path(_env("LOCAL_STORAGE_DIR", str(ROOT / "outputs" / "storage"))),
         max_upload_mb=int(_env("MAX_UPLOAD_MB", "50")),
+        max_recording_mb=int(_env("MAX_RECORDING_MB", "300")),
         live_retention_sec=int(_env("LIVE_RETENTION_SEC", "3600")),
         rx_weak_rate=float(_env("RX_WEAK_RATE", "3.0")),
         rx_rate_window_sec=float(_env("RX_RATE_WINDOW_SEC", "2.0")),

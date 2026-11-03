@@ -125,6 +125,7 @@ ESP 6대가 서로 주고받는 바이너리 패킷(앞 3바이트 `b7 c5 03`)�
 - 같은 종류의 새 버전(가중치만 다름)은 폴더를 복사해 가중치와 `manifest.json`의 `name`·해시만 바꾸면 됩니다. 전처리가 다른 새 종류는 `app/pose/`에 어댑터(`add`, `poll`, `reset`, `calibration`, `quality`)를 하나 추가하고 `registry.py`에 등록합니다.
 - 출력 형식은 모델이 달라도 같습니다(`points`, `smoothed`, `action`, `posture`, `activity_score`, `direction`, `fall_alarm`). 점 이름과 연결선은 `/ws/pose` snapshot의 `model.points`, `model.skeleton`에 있습니다.
 - 표시 규칙과 게임 규칙(행동별 역동성 → `activity_score`, 0~0.2 상, 0.2~0.8 좌, 0.8~1.0 우)은 `manifest.json`의 `display`, `game`에 있습니다.
+- 6대 녹화(`.bin`)도 CSV와 같은 `POST /api/files`로 올립니다. 올리면 선택된 자세 모델로 바로 분석하고, 결과(스켈레톤)만 보관한 뒤 원본은 지웁니다. 재생은 기존 재생 API를 그대로 쓰고 `/ws/replays/{id}`의 `current`가 재생 시각의 스켈레톤입니다. 처음 적용할 때 `python scripts/migrate.py --apply`로 `csv_files.kind` 열을 추가해야 합니다.
 
 ```
 # ESP가 PC로 보내는 데이터를 서버로 넘기기 (저장도 함께)

@@ -6,6 +6,7 @@ from app.schemas.codes import ANALYSIS_ERROR_DOC, ANALYSIS_STATUS_DOC, AnalysisS
 
 _FILE_EXAMPLE = {
     "id": "5f0c2b9e-3a71-4d6c-8e2f-1b9a7c4d6e10",
+    "kind": "csi4",
     "filename": "night_csi_20261006.csv",
     "size_bytes": 2176086,
     "rows": 4024,
@@ -36,13 +37,14 @@ class FileOut(BaseModel):
     model_config = ConfigDict(json_schema_extra={"example": _FILE_EXAMPLE})
 
     id: str = Field(description="파일 ID")
+    kind: str = Field(description="파일 종류: `csi4` ESP 4대 CSV (그래프·히트맵·사건) | `mesh6` ESP 6대 녹화 .bin (스켈레톤 재생)")
     filename: str = Field(description="올린 파일 이름 (등록된 파일 목록 표시용)")
     size_bytes: int = Field(description="파일 크기(바이트)")
-    rows: int = Field(description="CSV 행 수")
+    rows: int = Field(description="CSV 행 수 (mesh6: 선 레코드 수)")
     packets: int = Field(description="분석에 쓰는 유효 패킷 수")
-    incomplete_rows: int = Field(description="진폭 값이 빠져 제외한 행 수")
-    receivers: list[str] = Field(description="파일에 들어 있는 수신기 (업로드 파일 확인의 '수신기 RX1·RX2·RX3')")
-    packets_by_rx: dict[str, int] = Field(description="수신기별 패킷 수")
+    incomplete_rows: int = Field(description="진폭 값이 빠져 제외한 행 수 (mesh6: 형식이 틀려 버린 패킷 수)")
+    receivers: list[str] = Field(description="파일에 들어 있는 수신기 (csi4: RX1·RX2·RX3 / mesh6: N1~N6)")
+    packets_by_rx: dict[str, int] = Field(description="수신기별 패킷 수 (mesh6: ESP별 레코드 수)")
     record_start: float = Field(description="기록 시작 시각 (업로드 파일 확인·'기록 시간')")
     record_end: float = Field(description="기록 끝 시각")
     duration_sec: float = Field(description="기록 길이(초) ('기록 시간 10시간')")
