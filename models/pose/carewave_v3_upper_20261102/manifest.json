@@ -1,0 +1,41 @@
+{
+  "name": "carewave_v3_upper_20261102",
+  "type": "upper3_gru",
+  "title": "ESP 6대 머리·어깨 + 행동 11종 (seed 3개 앙상블)",
+  "decoder_version": "carewave_v3_mesh_links30_tail256_amp128_mask2_v2",
+  "run_hash": "b0af020e86e5bc1f2e5e78f55055bfe2afad7f6d254e872bcc224e321c1678c0",
+  "cfg": {"hz": 10, "window": 20, "stride": 2, "max_age": 0.15},
+  "links": ["n1_p2", "n1_p3", "n1_p4", "n1_p5", "n1_p6",
+            "n2_p1", "n2_p3", "n2_p4", "n2_p5", "n2_p6",
+            "n3_p1", "n3_p2", "n3_p4", "n3_p5", "n3_p6",
+            "n4_p1", "n4_p2", "n4_p3", "n4_p5", "n4_p6",
+            "n5_p1", "n5_p2", "n5_p3", "n5_p4", "n5_p6",
+            "n6_p1", "n6_p2", "n6_p3", "n6_p4", "n6_p5"],
+  "points": ["head_nose", "left_shoulder", "right_shoulder"],
+  "skeleton": [["left_shoulder", "right_shoulder"], ["head_nose", "left_shoulder"], ["head_nose", "right_shoulder"]],
+  "classes": ["adjust", "fall", "getup", "jump", "lie", "lie_down", "return", "slow_lie", "stand", "two_steps", "walk"],
+  "scaler": {"file": "train_scaler.npz", "sha256": "bdfe5f9a3c8562e8d4b797c5b6ee3247a3de48e287a2f688bad34a72f8a6ffeb"},
+  "weights": [
+    {"file": "seed42.pt", "sha256": "fe423b0511360f0d9a5eb992a8129e504bd55767204e63df5ff773b6a4ecbacf"},
+    {"file": "seed123.pt", "sha256": "1a74621cbc06caa68657c5457c960456ee762c8fe5ff4c74dcec6418d2f83770"},
+    {"file": "seed2026.pt", "sha256": "1665fca45b5c451d54a0d0f70fe8f08d7cf2bf5e59ae183032fd43966a15c559"}
+  ],
+  "display": {
+    "groups": {
+      "upright": ["stand", "walk", "two_steps", "return", "jump", "adjust"],
+      "low": ["fall", "lie_down", "slow_lie", "getup"],
+      "lying": ["lie"]
+    },
+    "min_score": 0.55,
+    "min_margin": 0.10,
+    "hold_sec": 0.4,
+    "reset_gap_sec": 0.6,
+    "smooth_tau_sec": 0.15
+  },
+  "fall": {"threshold": 0.7, "hold_sec": 0.4},
+  "game": {
+    "intensity": {"stand": 0.0, "lie": 0.0, "adjust": 0.3, "slow_lie": 0.3, "lie_down": 0.5, "return": 0.5,
+                  "getup": 0.6, "two_steps": 0.7, "walk": 0.8, "jump": 1.0, "fall": 1.0},
+    "directions": [[0.2, "up"], [0.8, "left"], [1.0, "right"]]
+  }
+}

@@ -111,6 +111,32 @@ ESP32는 CSI raw 줄(`CSI_DATA,RX1,<mac>,<rssi>,...,[imag real imag real ...]`)�
 
 서브캐리어는 ESP32의 64개 중 빈 자리 12개(DC 1개, 가장자리 보호 대역 11개)를 위치로 빼서 항상 52개를 저장합니다.
 
+### ESP 6대 자세 추정 (머리·어깨 + 행동 11종)
+
+ESP 6대가 서로 주고받는 바이너리 패킷(앞 3바이트 `b7 c5 03`)이 같은 UDP 포트로 들어오면 자동으로 자세 추정 경로로 갑니다. 4대 텍스트 줄은 기존 경로 그대로입니다. 30개 선이 들어오면 스켈레톤 좌표, 행동, 아바타 자세, 미로 게임 방향, 넘어짐 경보가 WebSocket `/ws/pose`로 나옵니다. 세션을 켤 필요는 없습니다. 기본 모델은 13관절 TCN(`csipose_tcn_v3_posture`)입니다.
+
+- 모델은 `models/pose/<이름>/`(가중치, `manifest.json`)에 있고 `CAREWAVE_POSE_MODEL`로 고릅니다. 실행 중에는 `GET /api/pose/models`로 목록을 보고 `PUT /api/pose/models/active`로 바꿉니다.
+
+| 모델 폴더 | 종류(`type`) | 출력 | 비고 |
+|---|---|---|---|
+| `carewave_v3_upper_20261102` | `upper3_gru` | 코·양 어깨 3점, 행동 11종 | seed 3개 앙상블, 0.2초마다 |
+| `csipose_tcn_v3_posture` | `csipose_tcn` | 전신 13관절, 행동 6종 | 0.05초마다, **시작 10초 보정(서서 가만히)**, `POST /api/pose/calibration`으로 다시 보정 |
+
+- 같은 종류의 새 버전(가중치만 다름)은 폴더를 복사해 가중치와 `manifest.json`의 `name`·해시만 바꾸면 됩니다. 전처리가 다른 새 종류는 `app/pose/`에 어댑터(`add`, `poll`, `reset`, `calibration`, `quality`)를 하나 추가하고 `registry.py`에 등록합니다.
+- 출력 형식은 모델이 달라도 같습니다(`points`, `smoothed`, `action`, `posture`, `activity_score`, `direction`, `fall_alarm`). 점 이름과 연결선은 `/ws/pose` snapshot의 `model.points`, `model.skeleton`에 있습니다.
+- 표시 규칙과 게임 규칙(행동별 역동성 → `activity_score`, 0~0.2 상, 0.2~0.8 좌, 0.8~1.0 우)은 `manifest.json`의 `display`, `game`에 있습니다.
+
+```
+# ESP가 PC로 보내는 데이터를 서버로 넘기기 (저장도 함께)
+.venv/Scripts/python scripts/mesh_udp.py relay --to api.leewatertrue.site:5005 --save outputs/collected/session_raw.bin
+# 저장된 raw.bin을 실시간처럼 다시 보내기 (데모·점검)
+.venv/Scripts/python scripts/mesh_udp.py replay <raw.bin> --to 127.0.0.1:5005 --skip 250 --duration 60
+# 머리·어깨 모델이 학습 노트북 예측과 똑같이 나오는지 확인
+.venv/Scripts/python scripts/verify_pose.py --raw <test raw.bin> --labels <labels.csv> --expected <test_predictions.npz> --model models/pose/<이름>
+# 13관절 모델이 Skeleton-Model 저장소의 실시간 코드와 똑같이 나오는지 확인
+.venv/Scripts/python scripts/verify_tcn.py --raw <raw.bin> --model models/pose/csipose_tcn_v3_posture --reference ../Skeleton-Model
+```
+
 ## 7. 배포 (AWS EC2 + Docker)
 
 서버는 UDP 수신과 실시간 세션을 메모리에서 처리하므로 **1대, 워커 1개**로 계속 켜 둡니다. `app`(FastAPI)과 `caddy`(HTTPS 인증서 자동 발급, WebSocket 포함 프록시) 두 컨테이너로 실행합니다.
