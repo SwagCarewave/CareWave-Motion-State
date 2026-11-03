@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import analyses, events, files, maze, replays, sessions, system
+from app.api import analyses, events, files, maze, pose, replays, sessions, system
 from app.config import Settings, get_settings
 from app.docs.openapi import COMMON_RESPONSES, SWAGGER_UI, TAGS, TITLE
 from app.errors import UnhandledErrorMiddleware, install_error_handlers
@@ -20,6 +20,7 @@ from app.services.maze import MazeService
 from app.services.model_guard import verify_model
 from app.services.monitoring import SessionManager, run_ticker
 from app.services.playback import ReplayManager, run_replay_ticker
+from app.services.pose_live import build_pose_service, run_pose_ticker
 from app.services.udp_ingest import UdpCollector, run_udp_flusher, start_udp
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -41,7 +42,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.analyses = AnalysisService(settings, app.state.repos, app.state.files)
         app.state.replays = ReplayManager(settings, app.state.analyses)
         app.state.maze = MazeService(app.state.repos)
-        app.state.udp = UdpCollector(settings, app.state.sessions)
+        app.state.pose = build_pose_service(settings.pose_models_dir, settings.pose_model) if settings.pose_enabled else None
+        app.state.udp = UdpCollector(settings, app.state.sessions, pose=app.state.pose)
         for recover in (app.state.files.recover, app.state.analyses.recover):
             try:
                 await asyncio.to_thread(recover)
@@ -52,6 +54,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tickers = [asyncio.create_task(run_ticker(app.state.sessions, stop)),
                    asyncio.create_task(run_replay_ticker(app.state.replays, stop)),
                    asyncio.create_task(run_udp_flusher(app.state.udp, stop))]
+        if app.state.pose is not None:
+            tickers.append(asyncio.create_task(run_pose_ticker(app.state.pose, stop)))
         try:
             yield
         finally:
@@ -90,6 +94,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(replays.router)
     app.include_router(replays.ws_router)
     app.include_router(maze.router)
+    app.include_router(pose.router)
+    app.include_router(pose.ws_router)
     return app
 
 

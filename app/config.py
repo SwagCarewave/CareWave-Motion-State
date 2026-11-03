@@ -75,6 +75,9 @@ class Settings:
     supabase_key: str | None = None
     supabase_db_host: str | None = None
     supabase_db_password: str | None = None
+    pose_enabled: bool = True
+    pose_models_dir: Path = ROOT / "models" / "pose"
+    pose_model: str = "csipose_tcn_v3_posture"
     csv_bucket: str = "csv-uploads"
     results_bucket: str = "analysis-results"
 
@@ -114,6 +117,9 @@ def load_settings() -> Settings:
         recording_dir=Path(_env("RECORDING_DIR", "")) if _env("RECORDING_DIR", "") else None,
         recording_max_sec=float(_env("RECORDING_MAX_SEC", "900")),
         recording_keep_sec=float(_env("RECORDING_KEEP_SEC", "300")),
+        pose_enabled=_env("POSE_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on"),
+        pose_models_dir=Path(_env("POSE_MODELS_DIR", str(ROOT / "models" / "pose"))),
+        pose_model=_env("POSE_MODEL", "csipose_tcn_v3_posture"),
         supabase_url=_supabase_url(os.environ.get("SUPABASE_URL")),
         supabase_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or None,
         supabase_db_host=os.environ.get("SUPABASE_DB_HOST") or None,

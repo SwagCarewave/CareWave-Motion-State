@@ -8,8 +8,10 @@ from collections import Counter
 from typing import Callable
 
 from app.config import Settings
+from app.pose.packets import PacketError, is_mesh_payload, parse_payload
 from app.services.esp_csi import CsiParseError, parse_line
 from app.services.monitoring import SessionManager, SessionNotFound, SessionStopped
+from app.services.pose_live import PoseService
 
 log = logging.getLogger("carewave.udp")
 
@@ -18,9 +20,11 @@ MAX_BUFFER = 20000
 
 
 class UdpCollector(asyncio.DatagramProtocol):
-    def __init__(self, settings: Settings, sessions: SessionManager, clock: Callable[[], float] = time.time):
+    def __init__(self, settings: Settings, sessions: SessionManager, clock: Callable[[], float] = time.time,
+                 pose: PoseService | None = None):
         self.settings = settings
         self.sessions = sessions
+        self.pose = pose
         self.clock = clock
         self.buffer: list[dict] = []
         self.lock = threading.Lock()
@@ -45,6 +49,9 @@ class UdpCollector(asyncio.DatagramProtocol):
         if allowed and (not addr or addr[0] not in allowed):
             self.stats["rejected_source"] += 1
             return
+        if is_mesh_payload(data):
+            self._mesh(now, data)
+            return
         for line in data.decode("utf-8", errors="ignore").splitlines():
             if not line.strip():
                 continue
@@ -67,6 +74,20 @@ class UdpCollector(asyncio.DatagramProtocol):
                     self.stats["dropped_overflow"] += 1
                 self.buffer.append(item)
 
+    def _mesh(self, now: float, data: bytes) -> None:
+        self.stats["mesh_packets"] += 1
+        self.last_packet_wall = now
+        if self.pose is None:
+            self.stats["dropped_no_pose_model"] += 1
+            return
+        try:
+            _, records = parse_payload(data)
+        except PacketError as exc:
+            self.stats[f"rejected_mesh_{exc.reason}"] += 1
+            return
+        self.stats["mesh_records"] += len(records)
+        self.pose.ingest(now, records)
+
     def status(self) -> dict:
         return {
             "enabled": self.settings.udp_enabled,
@@ -76,6 +97,8 @@ class UdpCollector(asyncio.DatagramProtocol):
             "allowed_sources": list(self.settings.udp_allowed_sources),
             "rejected": sum(v for k, v in self.stats.items() if k.startswith("rejected_")),
             "dropped_no_session": self.stats["dropped_no_session"],
+            "mesh_packets": self.stats["mesh_packets"],
+            "mesh_records": self.stats["mesh_records"],
             "last_packet_at": None if self.last_packet_wall is None else round(self.last_packet_wall, 3),
         }
 
