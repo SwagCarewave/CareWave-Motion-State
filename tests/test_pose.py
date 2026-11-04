@@ -177,6 +177,31 @@ def test_service_ticks_into_subscribers_and_links(model):
     assert status["counters"]["records"] == 200 * 30
 
 
+def test_fall_alarm_is_off_until_observation_starts(model):
+    clock = FakeClock(2000.0)
+    watching = {"on": False}
+    service = PoseService(MODELS, ACTIVE, clock=clock, observing=lambda: watching["on"])
+    poll = service.runtime.poll
+    service.runtime.poll = lambda until: [{**f, "fall_alarm": True} for f in poll(until)]
+    rng = np.random.default_rng(0)
+    from app.pose.packets import LinkRecord
+
+    def feed(start):
+        for k in range(200):
+            ts = start + k / 50
+            service.ingest(ts, [LinkRecord(int(l[1]), int(l[4]), record(int(l[4]), rng.integers(-40, 40, size=(N_BINS, 2))))
+                                for l in model.links])
+        clock.now = start + 4.1
+        service.tick()
+
+    feed(2000.0)
+    assert service.recent and not any(f["fall_alarm"] for f in service.recent)
+    watching["on"] = True
+    service.recent.clear()
+    feed(2004.0)
+    assert service.recent and all(f["fall_alarm"] for f in service.recent)
+
+
 def test_udp_routes_mesh_and_text(settings):
     from app.services.udp_ingest import UdpCollector
 
