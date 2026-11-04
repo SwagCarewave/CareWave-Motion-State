@@ -169,6 +169,9 @@ class SessionManager:
         self.last_purge_wall = 0.0
         self.recorder = RecordingService(settings, lambda: self.clock())
 
+    def observing(self) -> bool:
+        return bool(self.live)
+
     @property
     def buffer_size(self) -> int:
         return int(self.settings.live_retention_sec / self.settings.frame_step_sec)

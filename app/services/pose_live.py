@@ -30,7 +30,9 @@ class PoseModelNotFound(LookupError):
 class PoseService:
     def __init__(self, models_dir: Path, active: str, rate_window_sec: float = 2.0, weak_hz: float = 20.0,
                  lost_sec: float = 2.0, poll_margin_sec: float = 0.1, clock: Callable[[], float] = time.time,
-                 retention_sec: float = 3600.0, burst_sec: float = 10.0):
+                 retention_sec: float = 3600.0, burst_sec: float = 10.0,
+                 observing: Callable[[], bool] | None = None):
+        self.observing = observing
         self.models_dir = Path(models_dir)
         self.rate_window_sec = rate_window_sec
         self.weak_hz = weak_hz
@@ -115,6 +117,7 @@ class PoseService:
 
     def tick(self) -> None:
         now = self.clock()
+        alarms_on = self.observing is None or self.observing()
         with self.inbox_lock:
             batch, self.inbox = self.inbox, []
         frames: list[dict] = []
@@ -143,6 +146,8 @@ class PoseService:
             collect(runtime.poll(now - self.poll_margin_sec))
             graph.extend(tracker.poll(now - self.poll_margin_sec))
             for f in frames:
+                if not alarms_on:
+                    f["fall_alarm"] = False
                 self.latest = f
                 self.recent.append(f)
             self.graph.extend(graph)
@@ -223,10 +228,11 @@ class PoseService:
             s.push(message)
 
 
-def build_pose_service(models_dir: Path, active: str, threads: int = 1) -> PoseService | None:
+def build_pose_service(models_dir: Path, active: str, threads: int = 1,
+                       observing: Callable[[], bool] | None = None) -> PoseService | None:
     torch.set_num_threads(threads)
     try:
-        return PoseService(models_dir, active)
+        return PoseService(models_dir, active, observing=observing)
     except (PoseModelError, PoseModelNotFound, FileNotFoundError):
         log.exception("pose model %s could not be loaded; 6-node pose stream is off", active)
         return None

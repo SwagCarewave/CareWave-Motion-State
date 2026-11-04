@@ -38,7 +38,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.repos = build_repositories(settings)
         app.state.sessions = SessionManager(settings, app.state.repos, app.state.model_info.sha256)
         app.state.events = EventService(app.state.repos, app.state.sessions, burst_sec=settings.event_burst_sec)
-        app.state.pose = build_pose_service(settings.pose_models_dir, settings.pose_model) if settings.pose_enabled else None
+        app.state.pose = build_pose_service(settings.pose_models_dir, settings.pose_model,
+                                            observing=app.state.sessions.observing) if settings.pose_enabled else None
         app.state.files = FileService(settings, app.state.repos)
         app.state.analyses = AnalysisService(
             settings, app.state.repos, app.state.files,

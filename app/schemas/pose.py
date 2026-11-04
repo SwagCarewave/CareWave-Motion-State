@@ -55,7 +55,7 @@ class PoseFrameOut(BaseModel):
                                               "가만히 있으면 0, 조심히 움직이면 낮고 역동적으로 움직이면 높음")
     direction: str | None = Field(description="미로 게임 방향. activity_score 0~0.2: up, 0.2~0.8: left, 0.8~1.0: right")
     direction_ko: str | None = Field(description="상 | 좌 | 우")
-    fall_alarm: bool = Field(description="넘어짐 확률이 0.7을 넘는 상태가 0.4초 이어지면 true")
+    fall_alarm: bool = Field(description="넘어짐 확률이 0.7을 넘는 상태가 0.4초 이어지면 true. 관찰 모드가 꺼져 있으면 항상 false")
     links_seen: int | None = Field(default=None, description="13관절 모델만: 이번 0.05초에 들어온 선 수")
     pixels: dict | None = Field(default=None, description="13관절 모델만: 좌표 기준 영상 크기 (width, height). 픽셀 = x·width, y·height")
 
