@@ -1,0 +1,37 @@
+{
+  "name": "csipose_tcn_v5_drift",
+  "type": "csipose_tcn",
+  "title": "ESP 6대 전신 13관절 + 행동 6종 (TCN v5_drift, 빈 방 2분 보정)",
+  "source": "SwagCarewave/Skeleton-Model@6fba499 outputs/runs/v5_drift/model.pt",
+  "cfg": {"feature_hz": 20, "window": 64, "calib_sec": 120.0, "late_sec": 0.03, "smooth": 0.35,
+          "subcarrier_group": 4, "good_kind": 6, "n_features": 15, "smooth_frames": 10, "infer_last_bins": 2},
+  "image_size": [1920, 1080],
+  "links": ["n1_p2", "n1_p3", "n1_p4", "n1_p5", "n1_p6",
+            "n2_p1", "n2_p3", "n2_p4", "n2_p5", "n2_p6",
+            "n3_p1", "n3_p2", "n3_p4", "n3_p5", "n3_p6",
+            "n4_p1", "n4_p2", "n4_p3", "n4_p5", "n4_p6",
+            "n5_p1", "n5_p2", "n5_p3", "n5_p4", "n5_p6",
+            "n6_p1", "n6_p2", "n6_p3", "n6_p4", "n6_p5"],
+  "points": ["nose", "left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist",
+             "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"],
+  "skeleton": [["nose", "left_shoulder"], ["nose", "right_shoulder"], ["left_shoulder", "right_shoulder"],
+               ["left_shoulder", "left_elbow"], ["left_elbow", "left_wrist"],
+               ["right_shoulder", "right_elbow"], ["right_elbow", "right_wrist"],
+               ["left_shoulder", "left_hip"], ["right_shoulder", "right_hip"], ["left_hip", "right_hip"],
+               ["left_hip", "left_knee"], ["left_knee", "left_ankle"],
+               ["right_hip", "right_knee"], ["right_knee", "right_ankle"]],
+  "classes": ["stand", "walk", "fall", "lie", "slow_lie", "other"],
+  "weights": [{"file": "model.pt", "sha256": "f8d8e293c00efd8fa0e2261ef6995ee97533444626b9a07c34b8ffbd48ead6e2"}],
+  "display": {
+    "groups": {"upright": ["stand", "walk"], "low": ["fall", "slow_lie"], "lying": ["lie"]},
+    "min_score": 0.55,
+    "min_margin": 0.10,
+    "hold_sec": 0.4,
+    "reset_gap_sec": 0.6
+  },
+  "fall": {"threshold": 0.7, "hold_sec": 0.4},
+  "game": {
+    "intensity": {"stand": 0.0, "walk": 1.0, "fall": 1.0, "lie": 0.0, "slow_lie": 0.4, "other": 0.5},
+    "directions": [[0.2, "up"], [0.8, "left"], [1.0, "right"]]
+  }
+}
