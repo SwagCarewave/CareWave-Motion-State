@@ -28,7 +28,8 @@ log = logging.getLogger("carewave.analysis")
 RESULT_VERSION = 1
 POSE_KIND = "pose"
 POSE_ACTIVITY_LINE = 0.8
-POSE_FRAME_FIELDS = ("ts", "smoothed", "action", "posture", "activity_score", "direction", "direction_ko", "fall_alarm")
+POSE_FRAME_FIELDS = ("ts", "smoothed", "action", "posture", "activity_score", "direction", "direction_ko", "fall_alarm",
+                     "person_present")
 FAIL_MESSAGES = {
     "source_missing": "원본 CSV를 찾을 수 없습니다. 파일을 다시 올려 주세요.",
     "recording_missing": "6대 녹화 원본은 분석이 끝나면 보관하지 않습니다. 다시 분석하려면 파일을 다시 올려 주세요.",

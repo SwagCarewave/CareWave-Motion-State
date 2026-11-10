@@ -55,9 +55,15 @@ class PoseFrameOut(BaseModel):
                                               "가만히 있으면 0, 조심히 움직이면 낮고 역동적으로 움직이면 높음")
     direction: str | None = Field(description="미로 게임 방향. activity_score 0~0.2: up, 0.2~0.8: left, 0.8~1.0: right")
     direction_ko: str | None = Field(description="상 | 좌 | 우")
-    fall_alarm: bool = Field(description="넘어짐 확률이 0.7을 넘는 상태가 0.4초 이어지면 true. 관찰 모드가 꺼져 있으면 항상 false")
+    fall_alarm: bool = Field(description="넘어짐 확률이 0.7을 넘는 상태가 0.4초 이어지면 true. 관찰 모드가 꺼져 있거나 사람이 없으면(person_present=false) 항상 false")
     links_seen: int | None = Field(default=None, description="13관절 모델만: 이번 0.05초에 들어온 선 수")
     pixels: dict | None = Field(default=None, description="13관절 모델만: 좌표 기준 영상 크기 (width, height). 픽셀 = x·width, y·height")
+    person_present: bool | None = Field(default=None, description="빈 방 보정 모델만: ESP 6대 영역 안에 사람이 있으면 true, 없으면 false. "
+                                                                  "false이면 스켈레톤·행동을 숨기세요 (좌표는 의미 없는 값). "
+                                                                  "null이면 이 모델은 사람 감지를 하지 않으므로 항상 표시")
+    presence_score: float | None = Field(default=None, description="빈 방 기준값과 현재 CSI의 차이 (최근 1초 평균). "
+                                                                    "빈 방 약 0.01, 사람이 있으면 약 0.07 이상. manifest presence.threshold(0.04) "
+                                                                    "아래가 absent_sec(2초) 이어지면 person_present=false")
 
 
 class LinkOut(BaseModel):
@@ -77,6 +83,8 @@ class CalibrationOut(BaseModel):
     active: bool = Field(description="지금 보정 중 (사람이 서서 가만히 있어야 함, 추정 없음)")
     progress: float = Field(description="보정 진행 0~1")
     seconds: float = Field(description="보정에 걸리는 시간(초)")
+    mode: str | None = Field(default=None, description="보정 방법. stand: 사람이 서서 가만히 (v3) | "
+                                                       "empty_room: 사람이 ESP 6대 영역 밖으로 나가 빈 방으로 (v5)")
 
 
 class PoseStatusOut(BaseModel):
