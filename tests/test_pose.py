@@ -314,3 +314,44 @@ def test_switch_model_and_recalibrate_api(client):
     assert client.post("/api/pose/calibration").json()["required"] is False
     assert client.put("/api/pose/models/active", json={"name": TCN}).status_code == 200
     assert client.get("/api/pose/status").json()["model"]["name"] == TCN
+
+
+def feed_still(rt, start: float, seconds: float, hz: float = 50.0) -> list[dict]:
+    """The same CSI on every link all the time: what an empty room looks like."""
+    from app.pose.packets import LinkRecord
+
+    fixed = {tx: tcn_entry(tx, np.random.default_rng(100 + tx)) for tx in range(1, 7)}
+    out = []
+    for k in range(int(seconds * hz)):
+        ts = start + k / hz
+        out.extend(rt.poll(ts))
+        for rx in range(1, 7):
+            for tx in range(1, 7):
+                if tx != rx:
+                    rt.add(ts, LinkRecord(rx, tx, fixed[tx]))
+    return out
+
+
+def test_presence_hides_person_in_empty_room_and_returns_when_csi_changes():
+    rt = load_runtime(MODELS / "csipose_tcn_v5_drift")
+    rt.calib_frames = 20                                  # 1 s instead of 2 min
+    assert feed_still(rt, 100.0, 1.05) == []
+    empty = feed_still(rt, 101.05, 3.5)
+    assert empty and all(f["presence_score"] < 0.04 for f in empty)
+    early = [f for f in empty if f["ts"] < 102.9]
+    late = [f for f in empty if f["ts"] > 103.3]
+    assert all(f["person_present"] for f in early)        # needs 2 s below the line before hiding
+    assert late and not any(f["person_present"] or f["fall_alarm"] for f in late)
+    back = feed_tcn(rt, 104.55, 1.0, seed=3)              # someone walks in: CSI moves away from the baseline
+    assert back[-1]["person_present"] is True and back[-1]["presence_score"] > 0.04
+
+
+def test_presence_is_null_for_models_without_empty_room_baseline():
+    rt = load_runtime(MODELS / TCN)
+    frames = feed_tcn(rt, 100.0, 11.0)
+    assert frames and frames[-1]["person_present"] is None and frames[-1]["presence_score"] is None
+
+
+def test_calibration_mode_tells_dashboard_what_to_ask():
+    assert load_runtime(MODELS / "csipose_tcn_v5_drift").calibration()["mode"] == "empty_room"
+    assert load_runtime(MODELS / TCN).calibration()["mode"] == "stand"

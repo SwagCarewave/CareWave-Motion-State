@@ -120,6 +120,11 @@ class TcnRuntime:
         self.fall_threshold = float(manifest.get("fall", {}).get("threshold", 0.7))
         self.fall_bins = int(round(manifest.get("fall", {}).get("hold_sec", 0.4) * self.hz))
         self.fall_index = manifest["classes"].index("fall") if "fall" in manifest["classes"] else None
+        presence = manifest.get("presence")
+        self.presence_threshold = float(presence["threshold"]) if presence else None
+        if presence:
+            self.presence_bins = max(1, int(round(presence.get("avg_sec", 1.0) * self.hz)))
+            self.absent_bins = max(1, int(round(presence.get("absent_sec", 2.0) * self.hz)))
         self.shaper = OutputShaper(self.name, manifest["points"], manifest["classes"], manifest.get("display", {}),
                                    manifest.get("game", {}), {})
         self.reset()
@@ -139,10 +144,20 @@ class TcnRuntime:
         self.bins_full = 0
         self.predictions = 0
         self.links_seen = 0
+        self.presence_recent: deque = deque(maxlen=getattr(self, "presence_bins", 1))
+        self.below_run = 0
         self.shaper.reset()
 
+    def _presence(self) -> tuple[bool, float]:
+        """Distance of the current CSI from the empty-room baseline, averaged over the last avg_sec.
+        A person changes it even when still (the body blocks links); an empty room stays near zero."""
+        self.presence_recent.append(float(np.abs(self.last - self.offset).mean()))
+        score = float(np.mean(self.presence_recent))
+        self.below_run = self.below_run + 1 if score < self.presence_threshold else 0
+        return self.below_run < self.absent_bins, score
+
     def calibration(self) -> dict:
-        return {"required": True, "active": self.offset is None,
+        return {"required": True, "active": self.offset is None, "mode": self.manifest.get("calibration_mode", "stand"),
                 "progress": round(min(1.0, len(self.calib) / self.calib_frames), 3),
                 "seconds": round(self.calib_frames / self.hz, 1)}
 
@@ -200,6 +215,7 @@ class TcnRuntime:
             if len(self.calib) >= self.calib_frames:
                 self.offset = np.mean(self.calib, axis=0)
             return None
+        present, presence_score = self._presence() if self.presence_threshold is not None else (None, None)
         self.bins_since_infer += 1
         if not infer:
             return None
@@ -217,7 +233,9 @@ class TcnRuntime:
         self.bins_since_infer = 0
         self.predictions += 1
         frame = self.shaper.frame(end, kp / self.size, self.ema / self.size, probs)
-        frame["fall_alarm"] = self.fall_run >= self.fall_bins
+        frame["fall_alarm"] = self.fall_run >= self.fall_bins and present is not False
+        frame["person_present"] = present
+        frame["presence_score"] = None if presence_score is None else round(presence_score, 4)
         frame["links_seen"] = self.links_seen
         frame["pixels"] = {"width": int(self.size[0]), "height": int(self.size[1])}
         return frame

@@ -32,8 +32,10 @@ SIGNALS = {
 
 CALIBRATE = {
     "summary": "자세 모델 다시 보정",
-    "description": "보정이 필요한 모델(`calibration.required`가 true, 예: 13관절 TCN)은 데이터가 들어오기 시작한 뒤 처음 10초를 "
-                   "기준값으로 씁니다. 이 10초 동안 **사람이 서서 가만히 있어야** 합니다. 사람이 움직였거나 자리를 옮겼다면 이 API로 "
+    "description": "보정이 필요한 모델(`calibration.required`가 true, 예: 13관절 TCN)은 데이터가 들어오기 시작한 뒤 처음 "
+                   "`calibration.seconds`초를 기준값으로 씁니다. `calibration.mode`가 stand(v3, 10초)면 **사람이 서서 가만히**, "
+                   "empty_room(v5, 120초)이면 **사람이 ESP 6대 영역 밖으로 나가 빈 방**이어야 합니다. 빈 방 모델은 이 기준값으로 "
+                   "사람 유무(`person_present`)도 판단합니다. 조건이 깨졌다면 이 API로 "
                    "보정을 처음부터 다시 시작합니다. 보정 중에는 추정이 나오지 않고 `calibration.progress`가 0→1로 올라갑니다. "
                    "보정이 필요 없는 모델은 입력 창만 비워집니다.",
     "responses": _UNAVAILABLE,
