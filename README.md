@@ -122,6 +122,7 @@ ESP 6대가 서로 주고받는 바이너리 패킷(앞 3바이트 `b7 c5 03`)�
 | `carewave_v3_upper_20261102` | `upper3_gru` | 코·양 어깨 3점, 행동 11종 | seed 3개 앙상블, 0.2초마다 |
 | `csipose_tcn_v3_posture` | `csipose_tcn` | 전신 13관절, 행동 6종 | 0.05초마다, **시작 10초 보정(서서 가만히)**, `POST /api/pose/calibration`으로 다시 보정 |
 | `csipose_tcn_v5_drift` | `csipose_tcn` | 전신 13관절, 행동 6종 | 0.05초마다, **빈 방 2분 보정**: 방 밖에서 `POST /api/pose/calibration`을 부르고 2분 동안 방을 비움. 사람이 움직여도 다시 보정할 필요 없음(ESP를 다시 꽂거나 옮겼을 때만). 녹화 업로드 분석은 v3로 바꾼 뒤에 할 것(v5로 분석하면 녹화 처음 2분을 빈 방으로 씀) |
+| `csipose_tcn_v7_venue` | `csipose_tcn` | 전신 13관절, 행동 6종, **영역 안 사람 감지** | v5를 2026-11-11 전시장(테이블로 둘러싼 영역, 바깥에 사람 통행) 녹화로 미세조정. 보정은 v5와 같이 빈 방 2분(영역 밖 통행은 괜찮음). 영역 안에 사람이 없으면 `person_present=false` (현장에서 학습한 30개 선 가중치, 1초 이어지면 숨김). 장소가 바뀌면 다시 녹화·학습 필요 |
 
 - 같은 종류의 새 버전(가중치만 다름)은 폴더를 복사해 가중치와 `manifest.json`의 `name`·해시만 바꾸면 됩니다. 전처리가 다른 새 종류는 `app/pose/`에 어댑터(`add`, `poll`, `reset`, `calibration`, `quality`)를 하나 추가하고 `registry.py`에 등록합니다.
 - 출력 형식은 모델이 달라도 같습니다(`points`, `smoothed`, `action`, `posture`, `activity_score`, `direction`, `fall_alarm`). 점 이름과 연결선은 `/ws/pose` snapshot의 `model.points`, `model.skeleton`에 있습니다.
