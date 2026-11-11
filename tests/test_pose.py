@@ -355,3 +355,13 @@ def test_presence_is_null_for_models_without_empty_room_baseline():
 def test_calibration_mode_tells_dashboard_what_to_ask():
     assert load_runtime(MODELS / "csipose_tcn_v5_drift").calibration()["mode"] == "empty_room"
     assert load_runtime(MODELS / TCN).calibration()["mode"] == "stand"
+
+
+def test_venue_model_uses_learned_presence_weights():
+    rt = load_runtime(MODELS / "csipose_tcn_v7_venue")
+    assert rt.presence_w is not None and rt.presence_w.shape == (30,) and rt.presence_threshold == 0.5
+    rt.calib_frames = 20
+    feed_still(rt, 100.0, 1.05)
+    frames = feed_still(rt, 101.05, 2.5)
+    assert frames and 0.0 <= frames[-1]["presence_score"] <= 1.0
+    assert frames[-1]["person_present"] is False

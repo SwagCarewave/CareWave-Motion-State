@@ -125,6 +125,9 @@ class TcnRuntime:
         if presence:
             self.presence_bins = max(1, int(round(presence.get("avg_sec", 1.0) * self.hz)))
             self.absent_bins = max(1, int(round(presence.get("absent_sec", 2.0) * self.hz)))
+            w = presence.get("weights")
+            self.presence_w = None if w is None else np.asarray(w, np.float32)
+            self.presence_b = float(presence.get("bias", 0.0))
         self.shaper = OutputShaper(self.name, manifest["points"], manifest["classes"], manifest.get("display", {}),
                                    manifest.get("game", {}), {})
         self.reset()
@@ -151,8 +154,12 @@ class TcnRuntime:
     def _presence(self) -> tuple[bool, float]:
         """Distance of the current CSI from the empty-room baseline, averaged over the last avg_sec.
         A person changes it even when still (the body blocks links); an empty room stays near zero."""
-        self.presence_recent.append(float(np.abs(self.last - self.offset).mean()))
-        score = float(np.mean(self.presence_recent))
+        self.presence_recent.append(np.abs(self.last - self.offset).mean(axis=1))
+        per_link = np.mean(self.presence_recent, axis=0)
+        if self.presence_w is None:
+            score = float(per_link.mean())
+        else:   # learned on site: probability that someone is inside the area (people may walk outside)
+            score = float(1.0 / (1.0 + np.exp(-(float(per_link @ self.presence_w) + self.presence_b))))
         self.below_run = self.below_run + 1 if score < self.presence_threshold else 0
         return self.below_run < self.absent_bins, score
 
